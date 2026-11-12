@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import paths
+from . import cost, paths
 from .expiry import epoch_milliseconds, jwt_expiry, remaining_percent
 from .models import Provider, ProviderUsage, UsageSource
 
@@ -134,6 +134,8 @@ def parse_codex_usage(text: str, updated_at: datetime) -> ProviderUsage:
         None,
         _string(root, "plan_type"),
         updated_at,
+        credit_balance=cost.codex_credits(text),
+        credit_limit_reached=cost.codex_credit_limit_reached(text),
     )
 
 
@@ -160,6 +162,7 @@ def parse_claude_usage(text: str, updated_at: datetime, fallback_plan: str | Non
         None,
         _plan(root) or fallback_plan,
         updated_at,
+        extra_usage=cost.claude_extra(text),
     )
 
 

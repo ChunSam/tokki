@@ -7,7 +7,10 @@ import os
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from decimal import Decimal, InvalidOperation
+
 from . import paths
+from .cost import ClaudeExtraUsage, CostAmount
 from .models import Provider, ProviderUsage, UsageSnapshot, UsageSource
 from .parser import parse_iso
 
@@ -28,7 +31,48 @@ def _usage_to_dict(usage: ProviderUsage) -> dict:
         "Error": usage.error,
         "Plan": usage.plan,
         "UpdatedAt": usage.updated_at.isoformat(),
+        "ExtraUsage": _extra_to_dict(usage.extra_usage),
+        "CreditBalance": None if usage.credit_balance is None else str(usage.credit_balance),
+        "CreditLimitReached": usage.credit_limit_reached,
     }
+
+
+def _amount_to_dict(amount: CostAmount | None):
+    return None if amount is None else {"Value": str(amount.value), "Currency": amount.currency}
+
+
+def _amount_from_dict(raw) -> CostAmount | None:
+    if not isinstance(raw, dict):
+        return None
+    try:
+        return CostAmount(Decimal(str(raw["Value"])), str(raw.get("Currency") or "USD"))
+    except (KeyError, InvalidOperation):
+        return None
+
+
+def _extra_to_dict(extra: ClaudeExtraUsage | None):
+    if extra is None:
+        return None
+    return {"Used": _amount_to_dict(extra.used), "Limit": _amount_to_dict(extra.limit), "Severity": extra.severity}
+
+
+def _extra_from_dict(raw) -> ClaudeExtraUsage | None:
+    if not isinstance(raw, dict):
+        return None
+    used = _amount_from_dict(raw.get("Used"))
+    if used is None:
+        return None
+    severity = raw.get("Severity")
+    return ClaudeExtraUsage(used, _amount_from_dict(raw.get("Limit")), severity if isinstance(severity, str) else None)
+
+
+def _decimal_or_none(value) -> Decimal | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        return Decimal(str(value))
+    except InvalidOperation:
+        return None
 
 
 def _int_or_none(value):
@@ -49,6 +93,9 @@ def _usage_from_dict(raw: dict) -> ProviderUsage:
         raw.get("Error"),
         raw.get("Plan"),
         updated,
+        _extra_from_dict(raw.get("ExtraUsage")),
+        _decimal_or_none(raw.get("CreditBalance")),
+        raw.get("CreditLimitReached") if isinstance(raw.get("CreditLimitReached"), bool) else None,
     )
 
 

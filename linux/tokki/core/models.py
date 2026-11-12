@@ -5,6 +5,11 @@ from __future__ import annotations
 import enum
 from dataclasses import dataclass, replace
 from datetime import datetime
+from decimal import Decimal
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .cost import ClaudeExtraUsage
 
 
 class Provider(str, enum.Enum):
@@ -60,6 +65,11 @@ class ProviderUsage:
     error: str | None
     plan: str | None
     updated_at: datetime
+    # Money the usage response carried. None keeps it off screen: an account
+    # that does not pay past its plan never sees any.
+    extra_usage: "ClaudeExtraUsage | None" = None
+    credit_balance: "Decimal | None" = None
+    credit_limit_reached: bool | None = None
 
     @property
     def is_available(self) -> bool:

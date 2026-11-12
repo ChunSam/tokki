@@ -35,6 +35,8 @@ class AppSettings:
     HistoryRetentionDays: int = 7
     ShowForecast: bool = True
     DepletionAlertEnabled: bool = False
+    # Money alerts sent this local month, kept across relaunches so each is said once.
+    DeliveredCostAlerts: list = field(default_factory=list)
     ShowResetCountdown: bool = True
     RenewClaudeTokenWithCli: bool = True
     # Ask GitHub once a day whether a newer release is out.
@@ -63,6 +65,10 @@ def from_dict(raw: dict) -> AppSettings:
         try:
             if key in _ENUMS:
                 value = _ENUMS[key](value)
+            elif key == "DeliveredCostAlerts":
+                if not isinstance(value, list):
+                    continue
+                value = [v for v in value if isinstance(v, str)]
             elif key == "PollPausedUntil":
                 if value is not None and not isinstance(value, str):
                     continue
