@@ -91,6 +91,7 @@ class TokkiApp:
         self.next_update_check_at: datetime | None = None
         self.available_update: str | None = None
         self.last_success: datetime | None = None
+        self.window = None
         # Autostart lives in the desktop's own folder; the file is the truth.
         self.settings.LaunchAtLogin = autostart.is_enabled()
 
@@ -304,7 +305,20 @@ class TokkiApp:
 
     def render(self) -> None:
         self.render_label()
-        self.indicator.set_menu(self.build_menu())
+        menu = self.build_menu()
+        self.indicator.set_menu(menu)
+        if self.window is not None and self.window.get_visible():
+            self.window.refresh_overview()
+
+    def open_window(self, *_args) -> None:
+        from .window import TokkiWindow
+        if self.window is None:
+            self.window = TokkiWindow(self)
+        else:
+            # Settings may have moved through the menu since it was last open.
+            self.window.rebuild()
+        self.window.show_all()
+        self.window.present()
 
     def render_label(self) -> None:
         now = _now()
@@ -377,6 +391,12 @@ class TokkiApp:
                     info(line)
             local = self.snapshot.updated_at.astimezone().strftime("%H:%M")
             info(text("updated_at", time=local))
+
+        details = Gtk.MenuItem(label=text("open_details"))
+        details.connect("activate", lambda *_: GLib.idle_add(lambda: (self.open_window(), False)[1]))
+        menu.append(details)
+        # A middle click on the panel item opens the window too.
+        self.indicator.set_secondary_activate_target(details)
 
         menu.append(Gtk.SeparatorMenuItem())
         refresh = Gtk.MenuItem(label=text("refresh_now"))
