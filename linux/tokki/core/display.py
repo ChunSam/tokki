@@ -38,6 +38,14 @@ def display_reset_at(usage: ProviderUsage) -> datetime | None:
     return None
 
 
+def preferred_forecast_window(usage: ProviderUsage) -> ForecastWindow:
+    """The 5h window when it reports, else 7d (Codex's normal state since the
+    5h limit went away), so Codex still gets a forecast and sparkline."""
+    if usage.remaining_5h is not None:
+        return ForecastWindow.FIVE_HOUR
+    return ForecastWindow.SEVEN_DAY if usage.remaining_7d is not None else ForecastWindow.FIVE_HOUR
+
+
 def is_seven_day_warning(usage: ProviderUsage) -> bool:
     return usage.remaining_7d is not None and usage.remaining_7d <= 10
 

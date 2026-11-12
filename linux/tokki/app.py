@@ -34,11 +34,11 @@ except (ValueError, ImportError):
     Notify = None
 
 from . import VERSION, autostart
-from .core import alerts, display, pause, paths, update_check
+from .core import alerts, display, forecast, history, pause, paths, update_check
 from .core.cache import CacheStore, apply_cache_policy
 from .core.cli_refresh import ClaudeCliRefresher
 from .core.client import UsageClient
-from .core.models import AppLanguage, DisplayMode, Provider, ProviderLabelStyle, ProviderUsage, UsageSnapshot, UsageSource
+from .core.models import AppLanguage, DisplayMode, ForecastWindow, Provider, ProviderLabelStyle, ProviderUsage, UsageSnapshot, UsageSource
 from .core.settings import SettingsStore, paused_until
 from .i18n import Localizer
 
@@ -47,6 +47,7 @@ REFRESH_CHOICES = (60, 120, 300, 600, 900)
 FIVE_HOUR_THRESHOLDS = (0, 10, 20, 30, 50)
 SEVEN_DAY_THRESHOLDS = (0, 5, 10, 20, 30)
 RESET_ALERT_MINUTES = (0, 5, 10, 15, 30, 60)
+HISTORY_RETENTION_DAYS = (3, 7, 14, 30)
 COUNTDOWN_TICK_SECONDS = 30
 # After the machine wakes, wait for the network to come back before fetching.
 WAKE_REFRESH_DELAY_SECONDS = 10
@@ -74,6 +75,8 @@ class TokkiApp:
         self.settings_store = SettingsStore()
         self.settings = self.settings_store.load()
         self.cache_store = CacheStore()
+        self.history_store = history.HistoryStore()
+        self.history = self.history_store.load()
         self.client = UsageClient(cli_refresher=ClaudeCliRefresher())
         self.snapshot: UsageSnapshot | None = self.cache_store.load(self._stale_tolerance(), _now())
         self.delivered_alerts: set[str] = set()
@@ -210,6 +213,8 @@ class TokkiApp:
         self.snapshot = merged
         if merged.claude.is_available or merged.codex.is_available:
             self.cache_store.save(merged)
+        # Only this poll's API measurements enter the record.
+        self.history = self.history_store.append(history.measurements_only(current), self.settings.HistoryRetentionDays, now)
         self.notify(merged, now)
         self.render()
         self.check_for_updates_if_due()
@@ -257,6 +262,7 @@ class TokkiApp:
         )
         active = alerts.candidates(snapshot, settings, now, self.text)
         active += alerts.freed_up_candidates(previous, snapshot, settings, self.text)
+        active += self._forecast_alerts(snapshot)
         fresh, self.delivered_alerts = alerts.to_deliver(active, self.delivered_alerts)
         if Notify is None:
             return
@@ -265,6 +271,18 @@ class TokkiApp:
                 Notify.Notification.new(candidate.title, candidate.body, "tokki").show()
             except GLib.Error as error:
                 print(f"tokki: notification failed: {error}", file=sys.stderr)
+
+    def _forecast_alerts(self, snapshot: UsageSnapshot) -> list[alerts.AlertCandidate]:
+        if not self.settings.DepletionAlertEnabled:
+            return []
+        inputs = []
+        for provider in (Provider.CLAUDE, Provider.CODEX):
+            usage = snapshot.usage(provider)
+            for window, reset_at in ((ForecastWindow.FIVE_HOUR, usage.reset_at_5h), (ForecastWindow.SEVEN_DAY, usage.reset_at_7d)):
+                result = forecast.forecast(self.history, provider, window, reset_at, snapshot.updated_at)
+                if result:
+                    inputs.append(forecast.ForecastAlertInput(provider, window, result, reset_at))
+        return forecast.forecast_alerts(inputs, True, self.text)
 
     # --- rendering -----------------------------------------------------------------
 
@@ -300,6 +318,15 @@ class TokkiApp:
         lines = [line]
         if usage.source is UsageSource.STATUS_LINE:
             lines.append("    " + text("source_statusline"))
+        if self.settings.ShowForecast:
+            window = display.preferred_forecast_window(usage)
+            reset_at = usage.reset_at_5h if window is ForecastWindow.FIVE_HOUR else usage.reset_at_7d
+            forecast_line = forecast.forecast_menu_line(forecast.forecast(self.history, usage.provider, window, reset_at, now), window, text)
+            if forecast_line:
+                lines.append("    " + forecast_line)
+            pace_line = forecast.pace_menu_line(usage, text)
+            if pace_line:
+                lines.append("    " + pace_line)
         if usage.error:
             lines.append("    " + usage.error[:90])
         return lines
@@ -361,6 +388,7 @@ class TokkiApp:
         menu.append(self._check(text("show_countdown"), self.settings.ShowResetCountdown, lambda on: self._set("ShowResetCountdown", on)))
         menu.append(self._check(text("notifications"), self.settings.NotificationsEnabled, lambda on: self._set("NotificationsEnabled", on)))
         menu.append(self._alert_thresholds_menu())
+        menu.append(self._history_menu())
         menu.append(self._check(text("renew_claude"), self.settings.RenewClaudeTokenWithCli, lambda on: self._set("RenewClaudeTokenWithCli", on)))
         menu.append(self._radio_submenu(text("language"), [
             (text("language_system"), AppLanguage.SYSTEM),
@@ -412,6 +440,50 @@ class TokkiApp:
         if resume:
             GLib.idle_add(self.refresh)
 
+    def _history_menu(self) -> Gtk.MenuItem:
+        text = self.text
+        root = Gtk.MenuItem(label=text("history"))
+        submenu = Gtk.Menu()
+
+        def info(label: str) -> None:
+            item = Gtk.MenuItem(label=label)
+            item.set_sensitive(False)
+            submenu.append(item)
+
+        info(history.trend_summary(self.history, self.snapshot, text) if self.snapshot else text("not_enough_history"))
+        for provider in (Provider.CLAUDE, Provider.CODEX):
+            window = display.preferred_forecast_window(self.snapshot.usage(provider)) if self.snapshot else ForecastWindow.FIVE_HOUR
+            line = history.sparkline_text(history.sparkline_series(self.history, provider, window))
+            if line:
+                info(f"{provider.display_name} {forecast.short_label(window)} {line}")
+        submenu.append(Gtk.SeparatorMenuItem())
+        submenu.append(self._check(text("show_forecast"), self.settings.ShowForecast, lambda on: self._set("ShowForecast", on)))
+        submenu.append(self._radio_submenu(text("history_retention"), [
+            (text("days", n=d), d) for d in HISTORY_RETENTION_DAYS
+        ], self.settings.HistoryRetentionDays, lambda v: self._set("HistoryRetentionDays", v)))
+        export = Gtk.MenuItem(label=text("export_history_csv"))
+        export.connect("activate", lambda *_: GLib.idle_add(self._export_csv))
+        submenu.append(export)
+        root.set_submenu(submenu)
+        return root
+
+    def _export_csv(self) -> bool:
+        text = self.text
+        dialog = Gtk.FileChooserDialog(title=text("export_history_csv").rstrip(".…"), action=Gtk.FileChooserAction.SAVE)
+        dialog.add_buttons(text("cancel"), Gtk.ResponseType.CANCEL, text("save"), Gtk.ResponseType.ACCEPT)
+        dialog.set_do_overwrite_confirmation(True)
+        dialog.set_current_name(f"tokki-history-{_now().astimezone():%Y%m%d}.csv")
+        dialog.set_current_folder(str(Path.home()))
+        try:
+            if dialog.run() == Gtk.ResponseType.ACCEPT:
+                target = Path(dialog.get_filename())
+                target.write_text(self.history_store.csv_string(), encoding="utf-8")
+        except OSError as error:
+            print(f"tokki: could not export history: {error}", file=sys.stderr)
+        finally:
+            dialog.destroy()
+        return False
+
     def _alert_thresholds_menu(self) -> Gtk.MenuItem:
         text = self.text
 
@@ -429,6 +501,7 @@ class TokkiApp:
         submenu.append(self._radio_submenu(text("reset_alert_minutes"), [
             (text("disabled") if v == 0 else text("minutes_before", n=v), v) for v in RESET_ALERT_MINUTES
         ], self.settings.ResetAlertMinutes, lambda v: self._set("ResetAlertMinutes", v)))
+        submenu.append(self._check(text("depletion_alert_toggle"), self.settings.DepletionAlertEnabled, lambda on: self._set("DepletionAlertEnabled", on)))
         parent.set_submenu(submenu)
         parent.set_sensitive(self.settings.NotificationsEnabled)
         return parent

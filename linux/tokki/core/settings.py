@@ -32,6 +32,9 @@ class AppSettings:
     SevenDayAlertThreshold: int = 10
     ResetAlertMinutes: int = 10
     StaleToleranceHours: int = 12
+    HistoryRetentionDays: int = 7
+    ShowForecast: bool = True
+    DepletionAlertEnabled: bool = False
     ShowResetCountdown: bool = True
     RenewClaudeTokenWithCli: bool = True
     # Ask GitHub once a day whether a newer release is out.
