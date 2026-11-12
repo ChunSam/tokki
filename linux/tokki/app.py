@@ -44,6 +44,9 @@ from .i18n import Localizer
 
 RESOURCES = Path(__file__).resolve().parent / "resources"
 REFRESH_CHOICES = (60, 120, 300, 600, 900)
+FIVE_HOUR_THRESHOLDS = (0, 10, 20, 30, 50)
+SEVEN_DAY_THRESHOLDS = (0, 5, 10, 20, 30)
+RESET_ALERT_MINUTES = (0, 5, 10, 15, 30, 60)
 COUNTDOWN_TICK_SECONDS = 30
 
 
@@ -72,6 +75,9 @@ class TokkiApp:
         self.client = UsageClient(cli_refresher=ClaudeCliRefresher())
         self.snapshot: UsageSnapshot | None = self.cache_store.load(self._stale_tolerance(), _now())
         self.delivered_alerts: set[str] = set()
+        # Each provider's last reading with numbers, for telling when a low window
+        # has refilled. Seeded from the cache so a reset during downtime counts.
+        self.last_readings = alerts.last_readings({}, self.snapshot) if self.snapshot else {}
         self.refreshing = False
         self.poll_source: int | None = None
         # Autostart lives in the desktop's own folder; the file is the truth.
@@ -161,16 +167,28 @@ class TokkiApp:
     # --- notifications -----------------------------------------------------------
 
     def notify(self, snapshot: UsageSnapshot, now: datetime) -> None:
-        active = alerts.candidates(
-            snapshot, self.settings.NotificationsEnabled,
-            self.settings.FiveHourAlertThreshold, self.settings.SevenDayAlertThreshold, now,
+        # Kept current while notifications are off, so turning them back on does
+        # not compare against a reading from hours ago.
+        previous = self.last_readings
+        self.last_readings = alerts.last_readings(previous, snapshot)
+        if not self.settings.NotificationsEnabled:
+            self.delivered_alerts = set()
+            return
+        settings = alerts.AlertSettings(
+            True,
+            self.settings.FiveHourAlertThreshold,
+            self.settings.SevenDayAlertThreshold,
+            self.settings.ResetAlertMinutes,
+            alerts.stalled_threshold(self.settings.RefreshIntervalSeconds),
         )
+        active = alerts.candidates(snapshot, settings, now, self.text)
+        active += alerts.freed_up_candidates(previous, snapshot, settings, self.text)
         fresh, self.delivered_alerts = alerts.to_deliver(active, self.delivered_alerts)
         if Notify is None:
             return
         for candidate in fresh:
             try:
-                Notify.Notification.new(self.text(candidate.title_key), candidate.body, "tokki").show()
+                Notify.Notification.new(candidate.title, candidate.body, "tokki").show()
             except GLib.Error as error:
                 print(f"tokki: notification failed: {error}", file=sys.stderr)
 
@@ -260,6 +278,7 @@ class TokkiApp:
 
         menu.append(self._check(text("show_countdown"), self.settings.ShowResetCountdown, lambda on: self._set("ShowResetCountdown", on)))
         menu.append(self._check(text("notifications"), self.settings.NotificationsEnabled, lambda on: self._set("NotificationsEnabled", on)))
+        menu.append(self._alert_thresholds_menu())
         menu.append(self._check(text("renew_claude"), self.settings.RenewClaudeTokenWithCli, lambda on: self._set("RenewClaudeTokenWithCli", on)))
         menu.append(self._radio_submenu(text("language"), [
             (text("language_system"), AppLanguage.SYSTEM),
@@ -279,6 +298,27 @@ class TokkiApp:
 
         menu.show_all()
         return menu
+
+    def _alert_thresholds_menu(self) -> Gtk.MenuItem:
+        text = self.text
+
+        def percent(value: int) -> str:
+            return text("disabled") if value == 0 else f"{value}%"
+
+        parent = Gtk.MenuItem(label=text("alert_thresholds"))
+        submenu = Gtk.Menu()
+        submenu.append(self._radio_submenu(text("five_hour_threshold"), [
+            (percent(v), v) for v in FIVE_HOUR_THRESHOLDS
+        ], self.settings.FiveHourAlertThreshold, lambda v: self._set("FiveHourAlertThreshold", v)))
+        submenu.append(self._radio_submenu(text("seven_day_threshold"), [
+            (percent(v), v) for v in SEVEN_DAY_THRESHOLDS
+        ], self.settings.SevenDayAlertThreshold, lambda v: self._set("SevenDayAlertThreshold", v)))
+        submenu.append(self._radio_submenu(text("reset_alert_minutes"), [
+            (text("disabled") if v == 0 else text("minutes_before", n=v), v) for v in RESET_ALERT_MINUTES
+        ], self.settings.ResetAlertMinutes, lambda v: self._set("ResetAlertMinutes", v)))
+        parent.set_submenu(submenu)
+        parent.set_sensitive(self.settings.NotificationsEnabled)
+        return parent
 
     def _check(self, label: str, active: bool, on_change) -> Gtk.CheckMenuItem:
         item = Gtk.CheckMenuItem(label=label)

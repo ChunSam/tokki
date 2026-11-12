@@ -27,6 +27,7 @@ class AppSettings:
     NotificationsEnabled: bool = False
     FiveHourAlertThreshold: int = 20
     SevenDayAlertThreshold: int = 10
+    ResetAlertMinutes: int = 10
     StaleToleranceHours: int = 12
     ShowResetCountdown: bool = True
     RenewClaudeTokenWithCli: bool = True
