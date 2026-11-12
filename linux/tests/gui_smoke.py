@@ -23,7 +23,7 @@ gi.require_version("Gdk", "3.0")
 import cairo  # noqa: E402
 from gi.repository import GLib, Gtk  # noqa: E402
 
-from tokki.core import history  # noqa: E402
+from tokki.core import admin_cost, history  # noqa: E402
 from tokki.core.cost import ClaudeExtraUsage, CostAmount  # noqa: E402
 from tokki.core.models import AppLanguage, Provider, ProviderUsage, UsageSnapshot, UsageSource  # noqa: E402
 from tokki.core.settings import AppSettings  # noqa: E402
@@ -61,6 +61,11 @@ class FakeApp:
         codex = ProviderUsage(Provider.CODEX, None, 8, None, now + timedelta(days=1), UsageSource.STALE_CACHE,
                               "Credentials expired for Codex API", "plus", now - timedelta(hours=1))
         self.snapshot = UsageSnapshot(claude, codex, now)
+        self.cost_service = admin_cost.AdminCostService(admin_cost.MemoryKeyStore(), {})
+        self.cost_states = {Provider.CLAUDE: admin_cost.CostState(
+            enabled=True, key_suffix="…1234",
+            cost=admin_cost.ProviderCost(Provider.CLAUDE, CostAmount(Decimal("84.2")), CostAmount(Decimal("3.07")),
+                                         [admin_cost.CostLineItem("claude-opus-5-5", CostAmount(Decimal("60")))], now - timedelta(hours=1), now))}
         self.history = []
         for i in range(144):
             at = now - timedelta(minutes=10 * (144 - i))
@@ -87,6 +92,14 @@ class FakeApp:
 
     def refresh_now(self):
         self.changes.append(("refresh", None))
+
+    def refresh_costs(self):
+        self.changes.append(("refresh_costs", None))
+
+    def cost_view(self, provider):
+        state = self.cost_states.get(provider, admin_cost.CostState())
+        budget = 100 if provider is Provider.CLAUDE else 0
+        return admin_cost.view(state, budget, datetime.now(timezone.utc), timezone.utc, self.text, Localizer(self.settings.Language).language)
 
 
 def pump():

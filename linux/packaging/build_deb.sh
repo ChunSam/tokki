@@ -48,7 +48,7 @@ Version: $VERSION
 Section: utils
 Priority: optional
 Architecture: all
-Depends: python3 (>= 3.10), python3-gi, python3-gi-cairo, gir1.2-gtk-3.0, gir1.2-ayatanaappindicator3-0.1 | gir1.2-appindicator3-0.1, xdg-utils
+Depends: python3 (>= 3.10), python3-gi, python3-gi-cairo, gir1.2-gtk-3.0, gir1.2-secret-1, gir1.2-ayatanaappindicator3-0.1 | gir1.2-appindicator3-0.1, xdg-utils
 Recommends: gir1.2-notify-0.7, gnome-shell-extension-appindicator
 Installed-Size: $(du -sk "$PKG/usr" | cut -f1)
 Maintainer: ChunSam <https://github.com/ChunSam/tokki>
