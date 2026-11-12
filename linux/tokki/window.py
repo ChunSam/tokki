@@ -186,7 +186,9 @@ class TokkiWindow(Gtk.Window):
             (ForecastWindow.SEVEN_DAY, usage.remaining_7d, usage.reset_at_7d),
         )):
             pace = forecast.pace_reading(usage, window)
-            reset_text = text("source_cache") if cached else display.format_window_reset(remaining, reset_at, now, text, usage.is_available)
+            # A cached number's reset keeps ticking while the number stands still;
+            # a window with no number has nothing cached to label.
+            reset_text = text("source_cache") if cached and remaining is not None else display.format_window_reset(remaining, reset_at, now, text, usage.is_available)
             grid.attach(Gtk.Label(label=forecast.short_label(window), xalign=0), 0, row, 1, 1)
             grid.attach(UsageBar(remaining, pace.expected_remaining_percent if pace else None, cached), 1, row, 1, 1)
             grid.attach(Gtk.Label(label=display.format_percent(remaining), xalign=1, width_chars=5), 2, row, 1, 1)
