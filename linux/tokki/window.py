@@ -73,6 +73,38 @@ class UsageBar(Gtk.DrawingArea):
         return False
 
 
+class BudgetBar(UsageBar):
+    """Share of the monthly budget spent: green, orange from 80%, red at 100%."""
+
+    def __init__(self, percent: int):
+        super().__init__(min(100, max(0, percent)), None, False)
+        self.percent = percent
+
+    def _draw(self, widget, cr):
+        width, height = widget.get_allocated_width(), widget.get_allocated_height()
+        radius = height / 2
+
+        def rounded(x, w):
+            cr.new_sub_path()
+            cr.arc(x + w - radius, radius, radius, -math.pi / 2, math.pi / 2)
+            cr.arc(x + radius, radius, radius, math.pi / 2, 3 * math.pi / 2)
+            cr.close_path()
+
+        rounded(0, width)
+        cr.set_source_rgba(0.5, 0.5, 0.5, 0.25)
+        cr.fill()
+        if self.remaining > 0:
+            rounded(0, max(height, width * self.remaining / 100))
+            if self.percent >= 100:
+                cr.set_source_rgb(0.86, 0.24, 0.22)
+            elif self.percent >= 80:
+                cr.set_source_rgb(0.96, 0.6, 0.1)
+            else:
+                cr.set_source_rgb(0.25, 0.65, 0.35)
+            cr.fill()
+        return False
+
+
 class HistoryChart(Gtk.DrawingArea):
     """Remaining % over the last day, measurements only."""
 
@@ -260,11 +292,7 @@ class TokkiWindow(Gtk.Window):
         row.pack_end(amount, False, False, 0)
         box.pack_start(row, False, False, 0)
         if view.budget_percent is not None:
-            bar = Gtk.LevelBar.new_for_interval(0, 100)
-            bar.set_value(min(100, view.budget_percent))
-            bar.add_offset_value(Gtk.LEVEL_BAR_OFFSET_LOW, 80)
-            bar.add_offset_value(Gtk.LEVEL_BAR_OFFSET_HIGH, 99)
-            box.pack_start(bar, False, False, 0)
+            box.pack_start(BudgetBar(view.budget_percent), False, False, 0)
         for line in (view.budget_text, view.detail, view.as_of):
             if line:
                 label = Gtk.Label(label=line, xalign=0)
