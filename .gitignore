@@ -6,3 +6,4 @@ dist/
 ._*
 *.user
 .claude/proposals/.last-wrap
+__pycache__/

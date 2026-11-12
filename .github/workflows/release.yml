@@ -153,12 +153,73 @@ jobs:
           path: dist/
           if-no-files-found: error
 
+  build-linux:
+    name: Build Linux deb
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: version
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            VERSION="${{ inputs.version }}"
+          else
+            VERSION="${GITHUB_REF_NAME}"
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          # Debian sorts a `~` suffix before the release, so v1.2.0-rc1 -> 1.2.0~rc1.
+          DEB_VERSION="${VERSION#v}"
+          echo "deb_version=${DEB_VERSION//-/\~}" >> "$GITHUB_OUTPUT"
+
+      - name: Run Linux tests
+        run: python3 -m unittest discover -s linux/tests -v
+
+      - name: Build deb
+        env:
+          TOKKI_VERSION: ${{ steps.version.outputs.deb_version }}
+        run: bash linux/packaging/build_deb.sh
+
+      # Install what is about to ship and ask it its version, the Linux
+      # counterpart of verifying the app bundle and the exe's version stamp.
+      - name: Install and verify deb
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y "./dist/tokki_${{ steps.version.outputs.deb_version }}_all.deb"
+          reported="$(tokki --version)"
+          expected="Tokki ${{ steps.version.outputs.deb_version }}"
+          if [ "$reported" != "$expected" ]; then
+            echo "installed tokki reports '$reported', expected '$expected'" >&2
+            exit 1
+          fi
+
+      - name: Package release asset
+        shell: bash
+        run: |
+          DEB="Tokki-Linux-${{ steps.version.outputs.version }}_all.deb"
+          mv "dist/tokki_${{ steps.version.outputs.deb_version }}_all.deb" "dist/${DEB}"
+          # File name only, LF-terminated, so sha256sum -c works beside the download.
+          cd dist
+          sha256sum "${DEB}" > "${DEB}.sha256"
+          sha256sum -c "${DEB}.sha256"
+
+      - name: Upload Linux artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Tokki-Linux-${{ steps.version.outputs.version }}
+          path: dist/
+          if-no-files-found: error
+
   publish-release:
     name: Publish GitHub Release
     runs-on: ubuntu-latest
     needs:
       - build-macos
       - build-windows
+      - build-linux
     steps:
       - name: Resolve version
         id: version

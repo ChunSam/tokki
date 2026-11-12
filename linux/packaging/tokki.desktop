@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Tokki
+Comment=Claude Code and Codex usage limits in the tray
+Comment[ko]=Claude Code와 Codex 사용 한도를 트레이에 표시
+Exec=tokki
+Icon=tokki
+Terminal=false
+Categories=Utility;Development;
+StartupNotify=false

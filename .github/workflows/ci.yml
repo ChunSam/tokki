@@ -75,6 +75,54 @@ jobs:
       - name: Verify app bundle
         run: swift scripts/verify_app_bundle.swift ".build/Tokki.app"
 
+  linux:
+    name: Linux tests + deb
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # The Linux port has its own local version default; keep it with the other two.
+      - name: Check Linux version default agrees
+        run: |
+          app=$(grep -m1 '^APP_VERSION=' scripts/build_app.sh | sed 's/.*:-//; s/}.*//')
+          linux=$(sed -n 's/^VERSION = "\(.*\)"$/\1/p' linux/tokki/__init__.py)
+          if [ -z "$app" ] || [ -z "$linux" ]; then
+            echo "could not read a version default (build_app.sh='$app', linux='$linux')" >&2
+            exit 1
+          fi
+          if [ "$app" != "$linux" ]; then
+            echo "version defaults disagree: build_app.sh=$app, linux/tokki/__init__.py=$linux" >&2
+            exit 1
+          fi
+          echo "version defaults agree: $app"
+
+      - name: Check Linux scripts are executable
+        run: |
+          missing=0
+          for script in linux/packaging/build_deb.sh scripts/claude-statusline-bridge.sh; do
+            if [ ! -x "$script" ]; then
+              echo "$script is documented as run directly but is not executable" >&2
+              missing=1
+            fi
+          done
+          exit $missing
+
+      - name: Core tests
+        run: python3 -m unittest discover -s linux/tests -v
+
+      - name: Build deb (release-path smoke)
+        run: bash linux/packaging/build_deb.sh
+
+      # Install the package through apt, so its Depends must resolve on a real
+      # Ubuntu, then load the GTK app module from the installed location.
+      - name: Install and verify deb
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ./dist/tokki_*_all.deb
+          tokki --version
+          python3 -c "import sys; sys.path.insert(0, '/usr/lib/tokki'); import tokki.app"
+
   windows:
     name: Windows build + tests
     runs-on: windows-latest

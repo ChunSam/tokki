@@ -2,7 +2,7 @@
 
 <img src="docs/images/menubar.png" alt="메뉴바의 Tokki — Codex 100% 4h56m · Claude 100%" width="200">
 
-macOS 메뉴바와 Windows 시스템 트레이에서 **Claude Code와 Codex의 사용량 잔량**(5시간·7일)과 리셋까지
+macOS 메뉴바와 Windows·Ubuntu 시스템 트레이에서 **Claude Code와 Codex의 사용량 잔량**(5시간·7일)과 리셋까지
 남은 시간을 보여 주는 작은 앱입니다. 이전 이름은 Token Tracker입니다.
 
 <img src="docs/images/popup.png" alt="Tokki 팝업 — Claude와 Codex 카드에 5시간·7일 잔량 막대, 리셋까지 남은 시간, 페이스, API 비용" width="346">
@@ -16,7 +16,7 @@ macOS 메뉴바와 Windows 시스템 트레이에서 **Claude Code와 Codex의 �
 ## English
 
 Tokki shows how much of your **Claude Code** and **Codex** usage limits is left — the 5-hour and
-weekly windows — and when each one resets, right in the macOS menu bar or the Windows system tray.
+weekly windows — and when each one resets, right in the macOS menu bar or the Windows / Ubuntu system tray.
 When the weekly window drops to 10% or below, it takes over the display.
 
 - Reads the access tokens the CLIs already stored. It never logs in and never spends a refresh
@@ -42,6 +42,10 @@ signed in to Claude Code and/or the Codex CLI on the same machine.
 - **Windows 10+**: unzip `win-x64` (most PCs) or `win-arm64` (Arm PCs) into any folder and run
   `TokenTracker.Windows.exe`. No installer, no .NET runtime needed. SmartScreen may warn about an
   unknown publisher: **More info → Run anyway**.
+
+- **Ubuntu 22.04+ (GNOME)**: `sudo apt install ./Tokki-Linux-vX.Y.Z_all.deb`, then start Tokki from
+  the app menu. The Linux port is a lighter tray app: usage, countdown, alerts, token renewal and
+  launch at login; no settings window, history or Admin cost yet.
 
 Unofficial; not affiliated with Anthropic or OpenAI. The rest of this README is in Korean.
 
@@ -108,6 +112,23 @@ Windows에서는 앱이 알림 영역 아이콘을 강제로 상시 표시하도
 숨겨져 있으면 우클릭 메뉴의 `아이콘 상시 표시 설정 열기...`로 Windows 작업표시줄 설정을 열고,
 알림 영역 아이콘 목록에서 `Tokki`를 켭니다.
 
+### Ubuntu (22.04 이상, GNOME)
+
+1. `Tokki-Linux-vX.Y.Z_all.deb`를 받습니다.
+2. 터미널에서 설치합니다. 필요한 GTK·AppIndicator 패키지는 apt가 함께 설치합니다.
+
+   ```bash
+   sudo apt install ./Tokki-Linux-vX.Y.Z_all.deb
+   ```
+
+3. 앱 메뉴에서 `Tokki`를 실행합니다. 상단 막대 오른쪽에 `AI 78% 2h44m` 같은 표시가 나타납니다.
+   설정은 그 표시를 눌러 나오는 메뉴에서 바꿉니다(표시 방식, 새로고침 간격, 알림, 언어, 로그인 시 자동 시작).
+
+Ubuntu 기본 GNOME에는 트레이 아이콘을 보여 주는 `Ubuntu AppIndicators` 확장이 켜져 있습니다. 다른
+배포판의 GNOME에서는 `gnome-shell-extension-appindicator`를 설치하고 켜야 아이콘이 보입니다.
+Linux 판은 사용량·카운트다운·잔량 부족 알림·Claude 토큰 자동 갱신·상태줄 브리지까지 지원하고, 설정 창·
+히스토리·예측·API 비용은 아직 없습니다. 설정과 캐시는 `~/.config/Token Tracker/`에 저장됩니다.
+
 ### 체크섬 확인 (선택)
 
 각 파일 옆의 `.sha256`을 같은 폴더에 받은 뒤 확인합니다.
@@ -116,6 +137,7 @@ Windows에서는 앱이 알림 영역 아이콘을 강제로 상시 표시하도
 shasum -a 256 -c Tokki-vX.Y.Z-macOS.dmg.sha256
 ```
 
+Ubuntu에서는 `sha256sum -c Tokki-Linux-vX.Y.Z_all.deb.sha256`을 씁니다.
 Windows PowerShell에서는 `Get-FileHash <zip 파일>`의 값을 `.sha256` 파일 안의 값과 비교합니다.
 
 ### Token Tracker에서 넘어올 때
@@ -336,6 +358,9 @@ Claude Code 상태줄은 세션에 5시간/7일 사용률을 그대로 넘겨줍
 }
 ```
 
+Ubuntu에서 .deb로 설치했다면 브리지는 `/usr/share/tokki/claude-statusline-bridge.sh`에 있고,
+`~/.config/Token Tracker/claude-statusline.json`에 기록합니다. `command`에 그 경로를 적습니다.
+
 `%USERPROFILE%\.claude\settings.json` (Windows):
 
 ```json
@@ -383,6 +408,16 @@ dotnet run --project windows/TokenTracker.Windows.Tests
 
 Apple Silicon Mac에서는 UTM의 Windows 11 Arm 가상 머신으로 테스트·빌드·실행을 할 수 있습니다.
 설정과 Mac에서 가상 머신을 다루는 방법은 [Windows VM 테스트](docs/windows-vm-testing.md)에 있습니다.
+
+### Linux 테스트·실행·패키지
+
+Python 3.10 이상과 GTK 3(`python3-gi`, `gir1.2-ayatanaappindicator3-0.1`)이 필요합니다.
+
+```bash
+python3 -m unittest discover -s linux/tests   # 코어 테스트
+(cd linux && python3 -m tokki)                 # 소스에서 트레이 앱 실행
+linux/packaging/build_deb.sh                   # dist/tokki_<버전>_all.deb 생성
+```
 
 ### Windows 앱 실행
 
@@ -471,6 +506,10 @@ hdiutil create \
 │   ├── TokenTracker.Windows
 │   ├── TokenTracker.Windows.Core
 │   └── TokenTracker.Windows.Tests
+├── linux
+│   ├── tokki            (core/ 순수 로직, app.py GTK 트레이)
+│   ├── tests
+│   └── packaging        (build_deb.sh, tokki.desktop)
 └── README.md
 ```
 

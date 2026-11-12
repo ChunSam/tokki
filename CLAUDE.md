@@ -11,7 +11,8 @@ Claude Code / Codex 사용량을 상시 표시하는 **macOS 메뉴바 앱(Swift
 두 개의 포트다. 앱 이름은 **Tokki**(이전 Token Tracker)다. 로직은 `Sources/TokenTrackerCore/`와
 `windows/TokenTracker.Windows.Core/`에 **파일 단위로 1:1 대응**하고, UI만 플랫폼별로 다르다
 (`TokenTrackerMenuBar/` ↔ `TokenTracker.Windows/`). Core 변경은 양쪽에 같이 넣고 양쪽 테스트에 같은
-진리표를 추가한다.
+진리표를 추가한다. 세 번째로 **Ubuntu 트레이 앱(Python + GTK3/AppIndicator, `linux/`)**이 있다. 그 Core
+(`linux/tokki/core/`)는 C# Core의 부분 포트로(설정 창·히스토리·예측·비용 없음), 같은 규칙이 걸린 곳은 같이 고친다.
 
 보이는 이름만 Tokki다. 모듈·네임스페이스·exe·번들 ID는 옛 이름 그대로이고, **설정 폴더·키체인
 서비스·DPAPI 엔트로피·Run 키 값의 `Token Tracker`는 바꾸지 않는다** — 바꾸면 기존 사용자의 설정·
@@ -28,6 +29,8 @@ swift run TokenTrackerSmokeTests                       # macOS 테스트 (통과
 scripts/build_app.sh                                   # .app 조립 (APP_ARCHS="arm64 x86_64" 로 universal)
 swift scripts/verify_app_bundle.swift ".build/Tokki.app"   # 조립된 .app 자체 검사
 dotnet run --project windows/TokenTracker.Windows.Tests/TokenTracker.Windows.Tests.csproj
+python3 -m unittest discover -s linux/tests            # Linux 테스트 (unittest, 개별 실행 가능)
+linux/packaging/build_deb.sh                           # dist/tokki_<버전>_all.deb
 ```
 
 - **XCTest도 xunit도 없다.** 테스트는 실행 타깃 두 개(`Sources/TokenTrackerSmokeTests/main.swift`,
@@ -77,8 +80,9 @@ dotnet run --project windows/TokenTracker.Windows.Tests/TokenTracker.Windows.Tes
   순으로 폴백하지만 **Windows는 한국어가 없으면 enum 이름을 그대로 노출한다**. 양쪽을 같이 채운다.
   화면·알림에 나가는 문자열은 전부 사전을 거친다 — Core enum의 영어 `label`이나 알림 본문의 문자열
   보간은 사전 점검에 안 잡혀, 설정 선택지와 알림 본문이 그렇게 영어로 남아 있었다.
-- **버전 기본값 2곳**: `scripts/build_app.sh`의 `APP_VERSION`/`APP_BUILD`,
-  `windows/TokenTracker.Windows/TokenTracker.Windows.csproj`의 `<Version>`. CI가 드리프트를 막는다.
+- **버전 기본값 3곳**: `scripts/build_app.sh`의 `APP_VERSION`/`APP_BUILD`,
+  `windows/TokenTracker.Windows/TokenTracker.Windows.csproj`의 `<Version>`, `linux/tokki/__init__.py`의
+  `VERSION`. CI가 드리프트를 막는다.
   릴리스 빌드는 태그와 run number로 덮어쓰므로 이 값들은 로컬 빌드용이다.
 - **설정 키**: macOS `Settings`(UserDefaults)와 Windows `AppSettings`/`SettingsStore`(JSON)가 1:1이다.
   키 이름이나 저장 경로를 바꾸면 기존 사용자 설정의 마이그레이션을 먼저 판단한다.
@@ -98,7 +102,7 @@ dotnet run --project windows/TokenTracker.Windows.Tests/TokenTracker.Windows.Tes
 버전 스탬프 확인), 릴리스 워크플로는 방금 쓴 체크섬을 그 자리에서 검증한다. **릴리스 후에는
 산출물을 실제로 내려받아 설치·실행해 본다.**
 
-릴리스 순서: 두 버전 기본값 범프 → PR 머지 → `git tag -a vX.Y.Z` → push → `release.yml`이 DMG·zip·
+릴리스 순서: 세 버전 기본값 범프 → PR 머지 → `git tag -a vX.Y.Z` → push → `release.yml`이 DMG·zip·deb·
 체크섬을 만들고 GitHub Release를 낸다. 받아서 설치하는 단계까지의 절차와 함정은 `release` 스킬
 (`.claude/skills/release/`)에 있다.
 

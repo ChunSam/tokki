@@ -11,6 +11,8 @@ Claude Code와 Codex의 토큰 한도 잔량을 퍼센트로 상시 확인하는
 
 - Swift Package 기반 macOS 네이티브 메뉴바 앱 (`NSStatusItem`)
 - .NET WinForms `NotifyIcon` 기반 Windows 트레이 앱
+- Python + GTK3 AppIndicator 기반 Ubuntu 트레이 앱(`linux/`, .deb 배포). 사용량·카운트다운·잔량 부족 알림·
+  Claude CLI 토큰 갱신·상태줄 브리지·자동 시작까지. 설정 창·히스토리·예측·비용은 아직 없음
 - Claude Code / Codex 사용량 조회 (API 우선, 실패 시 마지막 성공 값을 한도 시간 안에서 유지, 그 뒤 `--`)
 - 메뉴바 표시 모드 4종, 제공자 표기 2종(약어 / 공식 아이콘), 리셋까지 남은 시간 표기
 - 설정 창: 표시 · 제공자 on/off · 새로고침 간격 · 언어(한/영) · 알림 · 히스토리 · 예측
@@ -39,6 +41,11 @@ Token tracker/
 │   ├── TokenTracker.Windows/        WinForms 트레이 앱
 │   ├── TokenTracker.Windows.Core/   Core의 C# 포트
 │   └── TokenTracker.Windows.Tests/  Core 스모크 테스트
+├── linux/
+│   ├── tokki/core/              C# Core의 Python 부분 포트
+│   ├── tokki/app.py             GTK3 AppIndicator 트레이
+│   ├── tests/                   unittest
+│   └── packaging/build_deb.sh   .deb 조립
 ├── scripts/
 │   ├── build_app.sh             release 빌드 → `.app` 번들 (universal 지원)
 │   └── verify_app_bundle.swift  조립된 `.app`이 자기 리소스를 찾는지 검사
