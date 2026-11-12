@@ -43,7 +43,17 @@ fi
 PAYLOAD=$(cat)
 
 # The folder keeps the app's pre-Tokki name; see AppPaths.cacheDirectory.
-OUT=${TOKEN_TRACKER_STATUSLINE_FILE:-"$HOME/Library/Application Support/Token Tracker/claude-statusline.json"}
+# Linux keeps it under XDG_CONFIG_HOME, where the Linux app reads (linux/tokki/core/paths.py).
+if [ "$(uname -s 2>/dev/null)" = "Darwin" ]; then
+    DEFAULT_OUT="$HOME/Library/Application Support/Token Tracker/claude-statusline.json"
+else
+    case "${XDG_CONFIG_HOME:-}" in
+        /*) CONFIG_HOME=$XDG_CONFIG_HOME ;;
+        *) CONFIG_HOME="$HOME/.config" ;;
+    esac
+    DEFAULT_OUT="$CONFIG_HOME/Token Tracker/claude-statusline.json"
+fi
+OUT=${TOKEN_TRACKER_STATUSLINE_FILE:-"$DEFAULT_OUT"}
 
 PYTHON=$(command -v python3 || command -v python || true)
 # Silence is right for a status line, but a bridge that quietly does nothing
