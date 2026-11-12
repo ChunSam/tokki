@@ -123,6 +123,22 @@ jobs:
           tokki --version
           python3 -c "import sys; sys.path.insert(0, '/usr/lib/tokki'); import tokki.app"
 
+      # Draw the details window on a virtual display with the dependencies the deb
+      # pulled in. A missing binding (python3-gi-cairo) breaks every bar and chart
+      # at draw time, which only a real draw shows.
+      - name: GUI smoke (details window)
+        run: |
+          sudo apt-get install -y xvfb
+          xvfb-run -a python3 linux/tests/gui_smoke.py "${{ runner.temp }}/gui-smoke"
+
+      - name: Upload GUI smoke screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-gui-smoke
+          path: ${{ runner.temp }}/gui-smoke/
+          if-no-files-found: ignore
+
   windows:
     name: Windows build + tests
     runs-on: windows-latest
