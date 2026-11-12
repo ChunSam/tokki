@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 from gi.repository import Gtk
 
 from . import autostart
-from .core import cost, display, forecast, history, issues, paths
+from .core import admin_cost, cost, display, forecast, history, issues, paths
 from .core.models import AppLanguage, DisplayMode, ForecastWindow, Provider, ProviderLabelStyle, ProviderUsage, UsageSource
 
 REFRESH_CHOICES = (60, 120, 300, 600, 900, 1800)
@@ -162,6 +162,16 @@ class TokkiWindow(Gtk.Window):
             for provider, enabled in ((Provider.CLAUDE, self.app.settings.ClaudeEnabled), (Provider.CODEX, self.app.settings.CodexEnabled)):
                 if enabled:
                     self.overview_box.pack_start(self._card(snapshot.usage(provider), now), False, False, 0)
+                elif self.app.cost_view(provider) is not None:
+                    # Tracked by API cost alone.
+                    frame = Gtk.Frame()
+                    title = Gtk.Label(xalign=0)
+                    title.set_markup(f"<b>{provider.display_name}</b>")
+                    frame.set_label_widget(title)
+                    box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6, margin=10)
+                    self._cost_section(box, provider)
+                    frame.add(box)
+                    self.overview_box.pack_start(frame, False, False, 0)
         footer = Gtk.Box(spacing=8)
         updated = self.text("updated_at", time=snapshot.updated_at.astimezone().strftime("%H:%M")) if snapshot else ""
         footer.pack_start(Gtk.Label(label=updated, xalign=0), True, True, 0)
@@ -226,7 +236,40 @@ class TokkiWindow(Gtk.Window):
         caption.set_markup(f"<small>{text('history_trend').rstrip(':')} · {forecast.short_label(window)}</small>")
         box.pack_start(caption, False, False, 0)
         box.pack_start(HistoryChart(points, now, text("not_enough_history")), False, False, 0)
+        # Last, after everything about the subscription, as on the macOS card.
+        self._cost_section(box, usage.provider)
         return frame
+
+    def _cost_section(self, box: Gtk.Box, provider: Provider) -> None:
+        view = self.app.cost_view(provider)
+        if view is None:
+            return
+        text = self.text
+        box.pack_start(Gtk.Separator(), False, False, 4)
+        heading = Gtk.Label(xalign=0)
+        status = "" if view.status is admin_cost.CostStatus.OK else f"  <small>{view.status_title}</small>"
+        heading.set_markup(f"<b>{text('cost_section_title', organization=admin_cost.organization(provider))}</b>{status}")
+        if view.failure_message:
+            heading.set_tooltip_text(view.failure_message)
+        box.pack_start(heading, False, False, 0)
+        row = Gtk.Box(spacing=8)
+        row.pack_start(Gtk.Label(label=view.month_label, xalign=0), False, False, 0)
+        amount = Gtk.Label(xalign=1)
+        color = "#d93c38" if (view.budget_percent or 0) >= 100 else "#f59a1a" if view.is_budget_warning else None
+        amount.set_markup(f"<b><span foreground='{color}'>{view.month_value}</span></b>" if color else f"<b>{view.month_value}</b>")
+        row.pack_end(amount, False, False, 0)
+        box.pack_start(row, False, False, 0)
+        if view.budget_percent is not None:
+            bar = Gtk.LevelBar.new_for_interval(0, 100)
+            bar.set_value(min(100, view.budget_percent))
+            bar.add_offset_value(Gtk.LEVEL_BAR_OFFSET_LOW, 80)
+            bar.add_offset_value(Gtk.LEVEL_BAR_OFFSET_HIGH, 99)
+            box.pack_start(bar, False, False, 0)
+        for line in (view.budget_text, view.detail, view.as_of):
+            if line:
+                label = Gtk.Label(label=line, xalign=0)
+                label.set_line_wrap(True)
+                box.pack_start(label, False, False, 0)
 
     # --- settings ----------------------------------------------------------------------
 
@@ -299,6 +342,21 @@ class TokkiWindow(Gtk.Window):
         check(text("renew_claude"), s.RenewClaudeTokenWithCli, lambda on: self.app._set("RenewClaudeTokenWithCli", on))
         check("Codex", s.CodexEnabled, lambda on: self.app._set("CodexEnabled", on, refresh=True))
 
+        for provider, enabled_key, budget_key in ((Provider.CLAUDE, "ClaudeCostEnabled", "ClaudeMonthlyBudget"),
+                                                  (Provider.CODEX, "CodexCostEnabled", "CodexMonthlyBudget")):
+            header(text("cost_section_title", organization=admin_cost.organization(provider)))
+            check(text("api_cost"), getattr(s, enabled_key), lambda on, k=enabled_key: self._set_cost(k, on))
+            number(text("monthly_budget"), getattr(s, budget_key), 0, 1_000_000, "USD", lambda v, k=budget_key: self.app._set(k, v))
+            key_row = Gtk.Box(spacing=8)
+            state = self.app.cost_states.get(provider)
+            suffix = state.key_suffix if state and state.key_suffix else None
+            key_row.pack_start(Gtk.Label(label=text("admin_key_stored", suffix=suffix) if suffix else text("admin_key_none"), xalign=0), True, True, 0)
+            button = Gtk.Button(label=text("admin_key_button"))
+            button.connect("clicked", lambda _b, p=provider: self._edit_key(p))
+            key_row.pack_end(button, False, False, 0)
+            grid.attach(key_row, 0, row[0], 2, 1)
+            row[0] += 1
+
         header(text("notifications"))
         check(text("notifications_enabled"), s.NotificationsEnabled, lambda on: self.app._set("NotificationsEnabled", on))
         number(text("five_hour_threshold"), s.FiveHourAlertThreshold, 0, 100, "%", lambda v: self.app._set("FiveHourAlertThreshold", v))
@@ -315,6 +373,62 @@ class TokkiWindow(Gtk.Window):
         hint.set_margin_top(12)
         grid.attach(hint, 0, row[0], 2, 1)
         return grid
+
+    def _set_cost(self, key: str, on: bool) -> None:
+        self.app._set(key, on)
+        self.app.refresh_costs()
+
+    def _edit_key(self, provider: Provider) -> None:
+        """Paste, check the prefix, store in the keyring. The key never shows again,
+        only its last four characters."""
+        text = self.text
+        store = self.app.cost_service._key_store()
+        current = store.key(provider)
+        dialog = Gtk.Dialog(title=text("admin_key_title", organization=admin_cost.organization(provider)), transient_for=self, modal=True)
+        dialog.set_default_size(420, -1)
+        if current:
+            dialog.add_button(text("admin_key_delete"), 1)
+        dialog.add_buttons(text("admin_key_cancel"), Gtk.ResponseType.CANCEL, text("admin_key_save"), Gtk.ResponseType.OK)
+        dialog.set_default_response(Gtk.ResponseType.OK)
+        area = dialog.get_content_area()
+        area.set_spacing(8)
+        area.set_border_width(12)
+        guidance = Gtk.Label(label=text("admin_key_guidance"), xalign=0)
+        guidance.set_line_wrap(True)
+        guidance.set_max_width_chars(50)
+        area.pack_start(guidance, False, False, 0)
+        stored = admin_cost.key_suffix(current) if current else None
+        area.pack_start(Gtk.Label(label=text("admin_key_stored", suffix=stored) if stored else text("admin_key_none"), xalign=0), False, False, 0)
+        entry = Gtk.Entry()
+        entry.set_visibility(False)
+        entry.set_activates_default(True)
+        entry.set_placeholder_text(admin_cost.key_prefix(provider) + "…")
+        area.pack_start(entry, False, False, 0)
+        error = Gtk.Label(xalign=0)
+        area.pack_start(error, False, False, 0)
+        area.show_all()
+        try:
+            while True:
+                response = dialog.run()
+                if response == 1:
+                    store.delete(provider)
+                    break
+                if response != Gtk.ResponseType.OK:
+                    break
+                key = entry.get_text().strip()
+                if not admin_cost.looks_like_admin_key(key, provider):
+                    error.set_markup(f"<span foreground='#d93c38'>{text('admin_key_invalid', prefix=admin_cost.key_prefix(provider))}</span>")
+                    continue
+                if not store.save(provider, key):
+                    error.set_markup(f"<span foreground='#d93c38'>{text('admin_key_save_failed')}</span>")
+                    continue
+                break
+        finally:
+            entry.set_text("")
+            dialog.destroy()
+        self.app.refresh_costs()
+        from gi.repository import GLib
+        GLib.idle_add(lambda: (self.rebuild(), False)[1])
 
     def _set_language(self, value: AppLanguage) -> None:
         self.app._set("Language", value)

@@ -35,7 +35,7 @@ except (ValueError, ImportError):
     Notify = None
 
 from . import VERSION, autostart, diagnostics
-from .core import alerts, cost, display, forecast, history, issues, pause, paths, update_check
+from .core import admin_cost, alerts, cost, display, forecast, history, issues, pause, paths, update_check
 from .core.cache import CacheStore, apply_cache_policy
 from .core.cli_refresh import ClaudeCliRefresher
 from .core.client import UsageClient
@@ -92,6 +92,11 @@ class TokkiApp:
         self.available_update: str | None = None
         self.last_success: datetime | None = None
         self.window = None
+        self.zone = admin_cost.local_zone()
+        self.cost_service = admin_cost.AdminCostService()
+        self.cost_states: dict[Provider, admin_cost.CostState] = {}
+        self.refreshing_costs = False
+        self.refresh_costs_again = False
         # Autostart lives in the desktop's own folder; the file is the truth.
         self.settings.LaunchAtLogin = autostart.is_enabled()
 
@@ -225,7 +230,64 @@ class TokkiApp:
         self.notify(merged, now)
         self.render()
         self.check_for_updates_if_due()
+        self.refresh_costs()
         return False
+
+    # --- Admin API cost -------------------------------------------------------------
+
+    def cost_enabled(self) -> dict[Provider, bool]:
+        return {Provider.CLAUDE: self.settings.ClaudeCostEnabled, Provider.CODEX: self.settings.CodexCostEnabled}
+
+    def budgets(self) -> dict[Provider, int]:
+        return {Provider.CLAUDE: self.settings.ClaudeMonthlyBudget, Provider.CODEX: self.settings.CodexMonthlyBudget}
+
+    def refresh_costs(self) -> None:
+        """Rides the usage refresh on its own ten-minute schedule; a pause holds it.
+        A provider switched off never has its key read."""
+        if self.is_paused():
+            return
+        if self.refreshing_costs:
+            self.refresh_costs_again = True
+            return
+        self.refreshing_costs = True
+        enabled, zone = self.cost_enabled(), self.zone
+
+        def work():
+            try:
+                states = self.cost_service.refresh_if_due(enabled, _now(), zone)
+            except Exception as error:
+                print(f"tokki: cost refresh failed: {error}", file=sys.stderr)
+                states = dict(self.cost_service.states)
+            GLib.idle_add(self._apply_costs, states)
+
+        threading.Thread(target=work, name="tokki-costs", daemon=True).start()
+
+    def _apply_costs(self, states) -> bool:
+        self.refreshing_costs = False
+        self.cost_states = states
+        if self.settings.NotificationsEnabled and self.snapshot is not None:
+            self._notify_all(self._cost_alerts(self.snapshot, _now()))
+        self.render()
+        if self.refresh_costs_again:
+            self.refresh_costs_again = False
+            self.refresh_costs()
+        return False
+
+    def cost_view(self, provider: Provider):
+        state = self.cost_states.get(provider, admin_cost.CostState())
+        return admin_cost.view(state, self.budgets()[provider], _now(), self.zone, self.text, Localizer(self.settings.Language).language)
+
+    def cost_lines(self, provider: Provider) -> list[str]:
+        """What the API cost puts under a provider: the month, the budget, today
+        and the largest models, how far the data reaches."""
+        view = self.cost_view(provider)
+        if view is None:
+            return []
+        title = self.text("cost_section_title", organization=admin_cost.organization(provider))
+        head = f"{title}: {view.month_label} {view.month_value}"
+        if view.status is not admin_cost.CostStatus.OK:
+            head += f" ({view.status_title})"
+        return [head] + [line for line in (view.budget_text, view.detail, view.as_of) if line]
 
     # --- update check -------------------------------------------------------------
 
@@ -272,6 +334,9 @@ class TokkiApp:
         active += self._forecast_alerts(snapshot)
         fresh, self.delivered_alerts = alerts.to_deliver(active, self.delivered_alerts)
         fresh += self._cost_alerts(snapshot, now)
+        self._notify_all(fresh)
+
+    def _notify_all(self, fresh: list[alerts.AlertCandidate]) -> None:
         if Notify is None:
             return
         for candidate in fresh:
@@ -282,7 +347,9 @@ class TokkiApp:
 
     def _cost_alerts(self, snapshot: UsageSnapshot, now: datetime) -> list[alerts.AlertCandidate]:
         """Once per local month each, remembered in settings across relaunches."""
-        result = cost.evaluate_alerts(snapshot, self.settings.DeliveredCostAlerts, self.settings.NotificationsEnabled, now, self.text)
+        result = cost.evaluate_alerts(
+            snapshot, self.settings.DeliveredCostAlerts, self.settings.NotificationsEnabled, now, self.text, self.zone,
+            extra_alerts=lambda sent, month: admin_cost.budget_alerts(self.cost_states, self.budgets(), sent, now, self.zone, self.text))
         delivered = sorted(result.delivered)
         if delivered != self.settings.DeliveredCostAlerts:
             self.settings.DeliveredCostAlerts = delivered
@@ -324,16 +391,22 @@ class TokkiApp:
         now = _now()
         label = display.tray_label(
             self.snapshot, self.settings.DisplayMode, self.settings.ProviderLabelStyle,
-            self.settings.ShowResetCountdown, now, self.text("now"),
+            self.settings.ShowResetCountdown, now, self.text("now"), self.tray_costs(),
         )
         self.indicator.set_label(label, "Cdx 100% 6d23h · Cl 100% 4h59m")
         icon = "tokki-tray-warning.svg" if display.tray_shows_warning(self.snapshot, self.settings.DisplayMode) else "tokki-tray.svg"
         self.indicator.set_icon_full(str(RESOURCES / icon), "Tokki")
 
+    def tray_costs(self):
+        limits = {Provider.CLAUDE: self.settings.ClaudeEnabled, Provider.CODEX: self.settings.CodexEnabled}
+        return admin_cost.menu_bar_entries(limits, self.cost_states, self.budgets())
+
     def _provider_lines(self, usage: ProviderUsage, enabled: bool, now: datetime) -> list[str]:
         text = self.text
+        cost_lines = ["    " + line for line in self.cost_lines(usage.provider)]
         if not enabled:
-            return [f"{usage.display_name}: {text('disabled')}"]
+            # Subscription limits off: API cost alone may still be tracked.
+            return [f"{usage.display_name}: {text('disabled')}"] + cost_lines
         reported = usage.is_available
         five = display.format_window_reset(usage.remaining_5h, usage.reset_at_5h, now, text, reported)
         seven = display.format_window_reset(usage.remaining_7d, usage.reset_at_7d, now, text, reported)
@@ -367,7 +440,7 @@ class TokkiApp:
             pace_line = forecast.pace_menu_line(usage, text)
             if pace_line:
                 lines.append("    " + pace_line)
-        return lines
+        return lines + cost_lines
 
     def build_menu(self) -> Gtk.Menu:
         text = self.text
@@ -532,7 +605,9 @@ class TokkiApp:
     def diagnostics_text(self) -> str:
         return diagnostics.diagnostics_text(
             self.settings, self.history, self.snapshot, self.last_success,
-            self.client.cli_refresher.last_attempt if self.client.cli_refresher else None, _now())
+            self.client.cli_refresher.last_attempt if self.client.cli_refresher else None, _now(),
+            extra_lines=[line for p in (Provider.CLAUDE, Provider.CODEX)
+                         for line in admin_cost.diagnostics_lines(p, self.cost_states.get(p, admin_cost.CostState()))])
 
     def _copy_diagnostics(self) -> None:
         Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD).set_text(self.diagnostics_text(), -1)

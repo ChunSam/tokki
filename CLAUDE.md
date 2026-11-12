@@ -12,7 +12,7 @@ Claude Code / Codex 사용량을 상시 표시하는 **macOS 메뉴바 앱(Swift
 `windows/TokenTracker.Windows.Core/`에 **파일 단위로 1:1 대응**하고, UI만 플랫폼별로 다르다
 (`TokenTrackerMenuBar/` ↔ `TokenTracker.Windows/`). Core 변경은 양쪽에 같이 넣고 양쪽 테스트에 같은
 진리표를 추가한다. 세 번째로 **Ubuntu 트레이 앱(Python + GTK3/AppIndicator, `linux/`)**이 있다. 그 Core
-(`linux/tokki/core/`)는 C# Core의 부분 포트로(API 비용 없음), 같은 규칙이 걸린 곳은 같이 고친다.
+(`linux/tokki/core/`)는 C# Core의 포트이고 Admin 키는 libsecret에 둔다. 같은 규칙이 걸린 곳은 같이 고친다.
 
 보이는 이름만 Tokki다. 모듈·네임스페이스·exe·번들 ID는 옛 이름 그대로이고, **설정 폴더·키체인
 서비스·DPAPI 엔트로피·Run 키 값의 `Token Tracker`는 바꾸지 않는다** — 바꾸면 기존 사용자의 설정·

@@ -110,16 +110,26 @@ def _lowest(snapshot: UsageSnapshot) -> ProviderUsage | None:
     return min(candidates, key=display_percent) if candidates else None
 
 
-def status_title(snapshot: UsageSnapshot | None, mode: DisplayMode, style: ProviderLabelStyle = ProviderLabelStyle.ABBREVIATION) -> str:
+def status_title(snapshot: UsageSnapshot | None, mode: DisplayMode, style: ProviderLabelStyle = ProviderLabelStyle.ABBREVIATION, costs=None) -> str:
+    """`costs` holds the providers tracked by API cost alone (menu_bar_entries):
+    those show their month's spend where the percentage would be."""
     if snapshot is None:
         return "AI --"
+    spend = costs or {}
 
     def segment(provider: Provider) -> str:
-        return provider_label(provider, style) + " " + format_percent(display_percent(snapshot.usage(provider)))
+        label = provider_label(provider, style)
+        if provider in spend:
+            return label + " " + spend[provider].text
+        return label + " " + format_percent(display_percent(snapshot.usage(provider)))
 
     if mode is DisplayMode.LOWEST_REMAINING:
         lowest = _lowest(snapshot)
-        return "AI --" if lowest is None else f"AI {display_percent(lowest)}%"
+        if lowest is not None:
+            return f"AI {display_percent(lowest)}%"
+        if not spend:
+            return "AI --"
+        return " · ".join(segment(p) for p in (Provider.CLAUDE, Provider.CODEX) if p in spend)
     if mode is DisplayMode.BOTH:
         return segment(Provider.CODEX) + " · " + segment(Provider.CLAUDE)
     if mode is DisplayMode.CODEX_ONLY:
@@ -136,23 +146,31 @@ def tray_label(
     show_countdown: bool,
     now: datetime,
     now_text: str,
+    costs=None,
 ) -> str:
     """The panel label. GNOME's indicators have no tooltip, so the countdown the
     Windows tooltip carries goes after each number here, pointing at the reset of
     the window that number came from."""
     if snapshot is None:
         return "AI --"
+    spend = costs or {}
 
     def suffix(usage):
         return countdown_suffix(usage, show_countdown, now, now_text)
 
     def segment(provider: Provider) -> str:
+        if provider in spend:
+            return provider_label(provider, style) + " " + spend[provider].text
         usage = snapshot.usage(provider)
         return provider_label(provider, style) + " " + format_percent(display_percent(usage)) + suffix(usage)
 
     if mode is DisplayMode.LOWEST_REMAINING:
         lowest = _lowest(snapshot)
-        return "AI --" if lowest is None else f"AI {display_percent(lowest)}%" + suffix(lowest)
+        if lowest is not None:
+            return f"AI {display_percent(lowest)}%" + suffix(lowest)
+        if not spend:
+            return "AI --"
+        return " · ".join(segment(p) for p in (Provider.CLAUDE, Provider.CODEX) if p in spend)
     if mode is DisplayMode.BOTH:
         return segment(Provider.CODEX) + " · " + segment(Provider.CLAUDE)
     if mode is DisplayMode.CODEX_ONLY:

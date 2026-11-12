@@ -35,6 +35,12 @@ class AppSettings:
     HistoryRetentionDays: int = 7
     ShowForecast: bool = True
     DepletionAlertEnabled: bool = False
+    # Admin API cost: off by default, it needs a key the user stores first.
+    ClaudeCostEnabled: bool = False
+    CodexCostEnabled: bool = False
+    # Monthly budgets in whole US dollars. Zero is off.
+    ClaudeMonthlyBudget: int = 0
+    CodexMonthlyBudget: int = 0
     # Money alerts sent this local month, kept across relaunches so each is said once.
     DeliveredCostAlerts: list = field(default_factory=list)
     ShowResetCountdown: bool = True
