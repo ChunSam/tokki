@@ -16,10 +16,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from tokki import autostart  # noqa: E402
-from tokki.core import alerts, cache, cli_refresh, display, expiry, parser, pause, ratelimit, settings, statusline, update_check  # noqa: E402
+from tokki.core import alerts, cache, cli_refresh, display, expiry, forecast, history, parser, pause, ratelimit, settings, statusline, update_check  # noqa: E402
 from tokki.core.client import HttpResponse, UsageClient, retry_after  # noqa: E402
 from tokki.core.models import (  # noqa: E402
-    AppLanguage, DisplayMode, Provider, ProviderLabelStyle, ProviderUsage, UsageSnapshot, UsageSource,
+    AppLanguage, DisplayMode, ForecastWindow, Provider, ProviderLabelStyle, ProviderUsage, UsageSnapshot, UsageSource,
 )
 from tokki.i18n import Localizer  # noqa: E402
 
@@ -535,6 +535,132 @@ class UpdateCheckTests(unittest.TestCase):
         self.assertEqual(update_check.next_check(NOW, True), NOW + timedelta(hours=24))
         self.assertEqual(update_check.next_check(NOW, False), NOW + timedelta(hours=1))
         self.assertFalse(update_check.is_due(NOW + timedelta(hours=1), NOW))
+
+
+class HistoryTests(unittest.TestCase):
+    """UsageHistoryStore / policy / formatter truth tables from the Windows tests."""
+
+    EN = staticmethod(Localizer(AppLanguage.ENGLISH).text)
+
+    def test_measurements_only(self):
+        cached = usage(five=63, seven=80, source=UsageSource.STALE_CACHE)
+        recorded = history.measurements_only(UsageSnapshot(cached, usage(Provider.CODEX, five=91, seven=99), NOW))
+        self.assertIsNone(recorded.claude.remaining_5h)
+        self.assertIsNone(recorded.claude.remaining_7d)
+        self.assertEqual(recorded.codex.remaining_5h, 91)
+        self.assertIs(recorded.claude.source, UsageSource.STALE_CACHE)
+        relayed = history.measurements_only(UsageSnapshot(usage(five=50, source=UsageSource.STATUS_LINE), usage(Provider.CODEX), NOW))
+        self.assertIsNone(relayed.claude.remaining_5h)
+
+    def test_trend_uses_per_provider_baseline(self):
+        cached = usage(five=63, seven=80, source=UsageSource.STALE_CACHE)
+        gap = history.HistoryEntry(NOW - timedelta(hours=2), history.measurements_only(
+            UsageSnapshot(cached, usage(Provider.CODEX, five=91, seven=99), NOW - timedelta(hours=2))))
+        base = history.HistoryEntry(NOW - timedelta(hours=1), UsageSnapshot(
+            usage(five=90, seven=95), usage(Provider.CODEX, five=91, seven=99), NOW - timedelta(hours=1)))
+        current = UsageSnapshot(usage(five=63, seven=80), usage(Provider.CODEX, five=91, seven=99), NOW)
+        self.assertIn("Claude 5h -27", history.trend_summary([gap, base], current, self.EN))
+
+    def test_store_trend_and_csv(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = history.HistoryStore(Path(tmp) / "h.json")
+            snap = UsageSnapshot(usage(five=63, seven=80), usage(Provider.CODEX, five=91, seven=99), NOW)
+            store.append(snap, 7, NOW)
+            entries = store.append(snap, 7, NOW + timedelta(hours=1))
+            self.assertEqual(len(entries), 2)
+            self.assertEqual(store.load(), entries)
+            self.assertEqual(history.trend_summary(entries, snap, self.EN), "24h trend: Claude 5h 0% 7d 0% Codex 5h 0% 7d 0%")
+            missing = UsageSnapshot(usage(five=40), usage(Provider.CODEX, five=90, seven=99), NOW)
+            self.assertEqual(
+                history.trend_summary([history.HistoryEntry(NOW, missing)], snap, self.EN),
+                "24h trend: Claude 5h +23% 7d -- Codex 5h +1% 7d 0%")
+            csv = store.csv_string()
+            self.assertIn("recorded_at,provider,remaining_5h", csv)
+            self.assertIn("claude,63,80", csv)
+            # A poll within a minute replaces the last entry; old entries age out.
+            store.append(snap, 7, NOW + timedelta(hours=1, seconds=30))
+            self.assertEqual(len(store.load()), 2)
+            self.assertEqual(len(store.append(snap, 1, NOW + timedelta(days=1, hours=2))), 1)
+        self.assertEqual(history.trend_summary([], UsageSnapshot(usage(), usage(Provider.CODEX), NOW), self.EN), "Not enough history yet")
+
+    def test_sparkline(self):
+        entries = [history.HistoryEntry(NOW + timedelta(minutes=i), UsageSnapshot(usage(five=v), usage(Provider.CODEX), NOW)) for i, v in enumerate([100, 50, 0, None])]
+        self.assertEqual(history.sparkline_series(entries, Provider.CLAUDE, ForecastWindow.FIVE_HOUR), [100, 50, 0])
+        self.assertEqual(history.sparkline_text([100, 50, 0]), "█▅▁")
+        self.assertEqual(history.sparkline_text([40]), "")
+        many = [history.HistoryEntry(NOW + timedelta(minutes=i), UsageSnapshot(usage(five=i), usage(Provider.CODEX), NOW)) for i in range(40)]
+        self.assertEqual(history.sparkline_series(many, Provider.CLAUDE, ForecastWindow.FIVE_HOUR, 20)[:3], [0, 2, 4])
+
+
+class ForecastTests(unittest.TestCase):
+    """UsageForecaster / UsagePace truth tables from the Windows tests."""
+
+    EN = staticmethod(Localizer(AppLanguage.ENGLISH).text)
+
+    def entry(self, seconds_ago, claude5h, claude7d=100):
+        at = NOW - timedelta(seconds=seconds_ago)
+        return history.HistoryEntry(at, UsageSnapshot(usage(five=claude5h, seven=claude7d, updated=at), usage(Provider.CODEX, five=100, seven=100, updated=at), at))
+
+    def fc(self, entries, reset_at=None):
+        return forecast.forecast(entries, Provider.CLAUDE, ForecastWindow.FIVE_HOUR, reset_at, NOW)
+
+    def test_forecast(self):
+        steady = [self.entry(3600, 60), self.entry(1800, 50), self.entry(0, 40)]
+        result = self.fc(steady, NOW + timedelta(hours=3))
+        self.assertEqual(int(result.burn_per_hour), 20)
+        self.assertEqual(int(result.seconds_to_empty), 7200)
+        self.assertTrue(result.will_empty_before_reset)
+        self.assertFalse(self.fc(steady, NOW + timedelta(hours=1)).will_empty_before_reset)
+        reset = self.fc([self.entry(3600, 30), self.entry(1800, 80), self.entry(900, 70), self.entry(0, 60)])
+        self.assertEqual(int(reset.seconds_to_empty), 5400)
+        self.assertEqual(int(reset.burn_per_hour), 40)
+        self.assertIsNone(self.fc([self.entry(3600, 40), self.entry(0, 50)]))
+        self.assertIsNone(self.fc([self.entry(300, 60), self.entry(0, 50)]))
+        self.assertIsNone(self.fc([self.entry(10800, 60), self.entry(7200, 40)]))
+
+    def test_menu_line_and_alert(self):
+        steady = self.fc([self.entry(3600, 60), self.entry(1800, 50), self.entry(0, 40)], NOW + timedelta(hours=3))
+        self.assertEqual(forecast.forecast_menu_line(steady, ForecastWindow.FIVE_HOUR, self.EN), "Projected depletion: ~2h 0m · empties before reset")
+        self.assertEqual(forecast.forecast_menu_line(steady, ForecastWindow.SEVEN_DAY, self.EN), "Projected depletion: ~2h 0m (7d) · empties before reset")
+        self.assertIsNone(forecast.forecast_menu_line(None, ForecastWindow.SEVEN_DAY, self.EN))
+        reset = NOW + timedelta(hours=3)
+        item = forecast.ForecastAlertInput(Provider.CLAUDE, ForecastWindow.FIVE_HOUR, steady, reset)
+        found = forecast.forecast_alerts([item], True, self.EN)
+        self.assertEqual([c.id for c in found], [f"claude-5h-empty-before-reset-{int(reset.timestamp())}"])
+        self.assertEqual(found[0].body, "Claude 5h: ~2h 0m → 0% (before reset)")
+        self.assertEqual(forecast.forecast_alerts([item], False, self.EN), [])
+        early = self.fc([self.entry(3600, 60), self.entry(1800, 50), self.entry(0, 40)], NOW + timedelta(hours=1))
+        self.assertEqual(forecast.forecast_alerts([forecast.ForecastAlertInput(Provider.CLAUDE, ForecastWindow.FIVE_HOUR, early, NOW + timedelta(hours=1))], True, self.EN), [])
+
+    def pace(self, remaining, reset_in, window=ForecastWindow.FIVE_HOUR):
+        reset_at = NOW + timedelta(seconds=reset_in) if reset_in is not None else None
+        return forecast.pace_at(remaining, reset_at, window, NOW)
+
+    def test_pace(self):
+        P = forecast.Pace
+        self.assertIs(self.pace(30, 9000).pace, P.AHEAD)
+        self.assertIs(self.pace(50, 9000).pace, P.ON_TRACK)
+        self.assertIs(self.pace(41, 9000).pace, P.ON_TRACK)
+        self.assertIs(self.pace(39, 9000).pace, P.AHEAD)
+        self.assertIs(self.pace(75, 9000).pace, P.BEHIND)
+        self.assertEqual(self.pace(50, 9000).expected_remaining_percent, 50)
+        self.assertIs(self.pace(80, 302_400, ForecastWindow.SEVEN_DAY).pace, P.BEHIND)
+        self.assertIsNone(self.pace(50, None))
+        self.assertIsNone(self.pace(50, -60))
+        self.assertIsNone(self.pace(50, 20_000))
+        self.assertIsNone(self.pace(None, 9000))
+
+    def test_pace_line(self):
+        paced = usage(five=30, seven=75, reset5=NOW + timedelta(seconds=9000), reset7=NOW + timedelta(seconds=302_400))
+        self.assertEqual(forecast.pace_menu_line(paced, Localizer(AppLanguage.KOREAN).text), "페이스: 5h 빠름 · 7d 여유")
+        self.assertEqual(forecast.pace_menu_line(paced, self.EN), "Pace: 5h ahead · 7d under")
+        self.assertIsNone(forecast.pace_menu_line(paced.with_(source=UsageSource.STALE_CACHE), self.EN))
+        self.assertIs(forecast.pace_reading(paced.with_(source=UsageSource.STATUS_LINE), ForecastWindow.FIVE_HOUR).pace, forecast.Pace.AHEAD)
+
+    def test_preferred_window(self):
+        self.assertIs(display.preferred_forecast_window(usage(five=50, seven=80)), ForecastWindow.FIVE_HOUR)
+        self.assertIs(display.preferred_forecast_window(usage(Provider.CODEX, seven=80)), ForecastWindow.SEVEN_DAY)
+        self.assertIs(display.preferred_forecast_window(usage()), ForecastWindow.FIVE_HOUR)
 
 
 class LocalizationTests(unittest.TestCase):
