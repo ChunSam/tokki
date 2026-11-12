@@ -10,13 +10,21 @@ from __future__ import annotations
 import math
 from datetime import datetime, timedelta, timezone
 
-from gi.repository import Gtk
+from gi.repository import Gdk, Gtk
 
 from . import autostart
 from .core import admin_cost, cost, display, forecast, history, issues, paths
 from .core.models import AppLanguage, DisplayMode, ForecastWindow, Provider, ProviderLabelStyle, ProviderUsage, UsageSource
 
 REFRESH_CHOICES = (60, 120, 300, 600, 900, 1800)
+
+# The window stays the size of a card column: below the minimum the bars and
+# their reset times would be clipped, and past the maximum the bars stretch
+# across the screen and stop reading as bars. A maximum width also keeps GNOME
+# from maximizing it.
+MIN_WIDTH, MIN_HEIGHT = 440, 420
+MAX_WIDTH, MAX_HEIGHT = 620, 1100
+DEFAULT_WIDTH, DEFAULT_HEIGHT = 480, 640
 CHART_HOURS = 24
 
 
@@ -40,7 +48,7 @@ class UsageBar(Gtk.DrawingArea):
     def __init__(self, remaining: int | None, expected: int | None, muted: bool):
         super().__init__()
         self.remaining, self.expected, self.muted = remaining, expected, muted
-        self.set_size_request(220, 10)
+        self.set_size_request(160, 10)
         self.set_hexpand(True)
         self.connect("draw", self._draw)
 
@@ -111,7 +119,7 @@ class HistoryChart(Gtk.DrawingArea):
     def __init__(self, points: list[tuple[datetime, int]], now: datetime, empty_text: str):
         super().__init__()
         self.points, self.now, self.empty_text = points, now, empty_text
-        self.set_size_request(300, 70)
+        self.set_size_request(240, 70)
         self.set_hexpand(True)
         self.connect("draw", self._draw)
 
@@ -153,7 +161,11 @@ class TokkiWindow(Gtk.Window):
     def __init__(self, app):
         super().__init__(title="Tokki")
         self.app = app
-        self.set_default_size(460, 560)
+        self.set_default_size(DEFAULT_WIDTH, DEFAULT_HEIGHT)
+        geometry = Gdk.Geometry()
+        geometry.min_width, geometry.min_height = MIN_WIDTH, MIN_HEIGHT
+        geometry.max_width, geometry.max_height = MAX_WIDTH, MAX_HEIGHT
+        self.set_geometry_hints(None, geometry, Gdk.WindowHints.MIN_SIZE | Gdk.WindowHints.MAX_SIZE)
         self.set_icon_name("tokki")
         self.connect("delete-event", lambda *_: self.hide() or True)
         self.notebook = Gtk.Notebook()
@@ -172,10 +184,14 @@ class TokkiWindow(Gtk.Window):
         for child in self.notebook.get_children():
             self.notebook.remove(child)
         self.overview_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12, margin=16)
+        # Never scroll sideways: the content's own width is the floor, so the
+        # window cannot be narrowed until the cards are cut off.
         overview = Gtk.ScrolledWindow()
+        overview.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         overview.add(self.overview_box)
         self.notebook.append_page(overview, Gtk.Label(label=self.text("overview")))
         settings = Gtk.ScrolledWindow()
+        settings.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         settings.add(self._settings_page())
         self.notebook.append_page(settings, Gtk.Label(label=self.text("settings")))
         self.refresh_overview()
