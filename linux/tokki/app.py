@@ -449,15 +449,9 @@ class TokkiApp:
         menu = Gtk.Menu()
         now = _now()
 
-        def open_details(*_):
-            GLib.idle_add(lambda: (self.open_window(), False)[1])
-
-        def info(label: str, on_activate=open_details) -> None:
-            # Not insensitive: GNOME Shell draws the indicator's menu and dims a
-            # disabled item in every theme, which left the readings hard to read
-            # in dark mode. Clicking a reading opens the details instead.
+        def info(label: str) -> None:
             item = Gtk.MenuItem(label=label)
-            item.connect("activate", on_activate)
+            item.set_sensitive(False)
             menu.append(item)
 
         if self.available_update and self.settings.CheckForUpdates:
@@ -477,7 +471,7 @@ class TokkiApp:
             info(text("updated_at", time=local))
 
         details = Gtk.MenuItem(label=text("open_details"))
-        details.connect("activate", open_details)
+        details.connect("activate", lambda *_: GLib.idle_add(lambda: (self.open_window(), False)[1]))
         menu.append(details)
         self._details_item = details
 
@@ -495,7 +489,7 @@ class TokkiApp:
 
         menu.append(Gtk.SeparatorMenuItem())
         menu.append(self._diagnostics_menu())
-        info(f"Tokki {VERSION}", lambda *_: self._open(update_check.RELEASES_PAGE))
+        info(f"Tokki {VERSION}")
         quit_item = Gtk.MenuItem(label=text("quit"))
         quit_item.connect("activate", lambda *_: Gtk.main_quit())
         menu.append(quit_item)
@@ -508,8 +502,10 @@ class TokkiApp:
         until = paused_until(self.settings)
         if pause.is_paused(until, now):
             left = text("pause_until_resumed") if pause.is_indefinite(until, now) else pause.duration_text(pause.remaining(until, now).total_seconds())
-            # One live item rather than a dimmed status line over a resume button.
-            resume = Gtk.MenuItem(label=f"{text('updates_paused')}: {left} — {text('resume_now')}")
+            item = Gtk.MenuItem(label=f"{text('updates_paused')}: {left}")
+            item.set_sensitive(False)
+            menu.append(item)
+            resume = Gtk.MenuItem(label=text("resume_now"))
             resume.connect("activate", lambda *_: self._pause(None, resume=True))
             menu.append(resume)
         root = Gtk.MenuItem(label=text("pause_polling"))
