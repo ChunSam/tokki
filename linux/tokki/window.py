@@ -411,6 +411,11 @@ class TokkiWindow(Gtk.Window):
         header(text("history"))
         number(text("history_retention"), s.HistoryRetentionDays, 1, 365, text("unit_days"), lambda v: self.app._set("HistoryRetentionDays", v))
         number(text("stale_tolerance"), s.StaleToleranceHours, 1, 48, text("unit_hours"), lambda v: self.app._set("StaleToleranceHours", v))
+        export = Gtk.Button(label=text("export_history_csv"))
+        export.connect("clicked", lambda *_: self.app._export_csv())
+        export.set_halign(Gtk.Align.START)
+        grid.attach(export, 0, row[0], 2, 1)
+        row[0] += 1
         hint = Gtk.Label(xalign=0)
         hint.set_markup(f"<small>{text('settings_hint')}</small>")
         hint.set_line_wrap(True)
