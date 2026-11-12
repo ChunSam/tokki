@@ -132,6 +132,10 @@ jobs:
           sudo apt-get install -y xvfb fonts-nanum
           xvfb-run -a python3 linux/tests/gui_smoke.py "${{ runner.temp }}/gui-smoke"
 
+      # The real tray app on a session bus, with every Gtk-CRITICAL fatal.
+      - name: App smoke (tray app)
+        run: G_DEBUG=fatal-criticals dbus-run-session -- xvfb-run -a python3 linux/tests/app_smoke.py
+
       - name: Upload GUI smoke screenshots
         if: always()
         uses: actions/upload-artifact@v4

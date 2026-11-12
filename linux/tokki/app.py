@@ -144,7 +144,7 @@ class TokkiApp:
         self.render_label()
         if self.is_paused():
             # Keep the menu's pause countdown fresh, and lift a lapsed pause.
-            self.indicator.set_menu(self.build_menu())
+            self.render()
         return True
 
     def is_paused(self) -> bool:
@@ -373,7 +373,14 @@ class TokkiApp:
     def render(self) -> None:
         self.render_label()
         menu = self.build_menu()
+        # The old target lives in the outgoing menu; set_menu checks it against the
+        # new one and warns, so let go of it first.
+        self.indicator.set_secondary_activate_target(None)
         self.indicator.set_menu(menu)
+        # A middle click on the panel item opens the window too. Only once the menu
+        # is the indicator's: the library walks up from the item to that menu and
+        # warns (Gtk-CRITICAL) when it is not there yet.
+        self.indicator.set_secondary_activate_target(self._details_item)
         if self.window is not None and self.window.get_visible():
             self.window.refresh_overview()
 
@@ -471,8 +478,7 @@ class TokkiApp:
         details = Gtk.MenuItem(label=text("open_details"))
         details.connect("activate", lambda *_: GLib.idle_add(lambda: (self.open_window(), False)[1]))
         menu.append(details)
-        # A middle click on the panel item opens the window too.
-        self.indicator.set_secondary_activate_target(details)
+        self._details_item = details
 
         menu.append(Gtk.SeparatorMenuItem())
         refresh = Gtk.MenuItem(label=text("refresh_now"))
