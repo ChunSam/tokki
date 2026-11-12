@@ -50,6 +50,15 @@ EN = {
     "reset_alert_minutes": "Reset warning",
     "minutes_before": "{n} min before",
     "disabled": "off",
+    "pause_polling": "Pause updates",
+    "pause_1h": "For 1 hour",
+    "pause_3h": "For 3 hours",
+    "pause_until_resumed": "Until I resume",
+    "resume_now": "Resume now",
+    "updates_paused": "Updates paused",
+    "update_available": "New version {version}",
+    "download_update": "Download",
+    "check_for_updates": "Check for updates",
 }
 
 KO = {
@@ -94,6 +103,15 @@ KO = {
     "reset_alert_minutes": "리셋 임박 알림",
     "minutes_before": "{n}분 전",
     "disabled": "꺼짐",
+    "pause_polling": "업데이트 일시중지",
+    "pause_1h": "1시간",
+    "pause_3h": "3시간",
+    "pause_until_resumed": "재개할 때까지",
+    "resume_now": "지금 재개",
+    "updates_paused": "업데이트 일시중지됨",
+    "update_available": "새 버전 {version}",
+    "download_update": "다운로드",
+    "check_for_updates": "업데이트 확인",
 }
 
 

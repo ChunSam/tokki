@@ -16,7 +16,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from tokki import autostart  # noqa: E402
-from tokki.core import alerts, cache, cli_refresh, display, expiry, parser, ratelimit, settings, statusline  # noqa: E402
+from tokki.core import alerts, cache, cli_refresh, display, expiry, parser, pause, ratelimit, settings, statusline, update_check  # noqa: E402
 from tokki.core.client import HttpResponse, UsageClient, retry_after  # noqa: E402
 from tokki.core.models import (  # noqa: E402
     AppLanguage, DisplayMode, Provider, ProviderLabelStyle, ProviderUsage, UsageSnapshot, UsageSource,
@@ -474,6 +474,67 @@ class CliRefreshTests(unittest.TestCase):
                 self.assertFalse(refresher.refresh_if_due(NOW + timedelta(minutes=1)))
             finally:
                 os.environ["PATH"] = old or ""
+
+
+class PauseTests(unittest.TestCase):
+    """PauseController truth table."""
+
+    def test_states(self):
+        self.assertFalse(pause.is_paused(None, NOW))
+        self.assertTrue(pause.is_paused(NOW + timedelta(minutes=1), NOW))
+        self.assertFalse(pause.is_paused(NOW, NOW))
+        self.assertEqual(pause.remaining(NOW + timedelta(hours=1), NOW), timedelta(hours=1))
+        self.assertEqual(pause.remaining(NOW - timedelta(hours=1), NOW), timedelta(0))
+        self.assertFalse(pause.is_indefinite(NOW + timedelta(hours=3), NOW))
+        self.assertTrue(pause.is_indefinite(pause.pause_until(None, NOW), NOW))
+        self.assertEqual(pause.pause_until(timedelta(hours=3), NOW), NOW + timedelta(hours=3))
+
+    def test_duration_text(self):
+        self.assertEqual(pause.duration_text(30), "<1m")
+        self.assertEqual(pause.duration_text(59 * 60), "59m")
+        self.assertEqual(pause.duration_text(2 * 3600 + 5 * 60), "2h 5m")
+        self.assertEqual(pause.duration_text(50 * 3600), "2d 2h")
+
+    def test_pause_survives_settings_round_trip(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = settings.SettingsStore(Path(tmp) / "s.json")
+            loaded = store.load()
+            self.assertIsNone(settings.paused_until(loaded))
+            loaded.PollPausedUntil = pause.pause_until(None, NOW).isoformat()
+            store.save(loaded)
+            again = store.load()
+            self.assertTrue(pause.is_paused(settings.paused_until(again), NOW))
+            self.assertTrue(pause.is_indefinite(settings.paused_until(again), NOW))
+            (Path(tmp) / "s.json").write_text(json.dumps({"PollPausedUntil": "garbage"}))
+            self.assertIsNone(settings.paused_until(store.load()))
+            (Path(tmp) / "s.json").write_text(json.dumps({"PollPausedUntil": 5}))
+            self.assertIsNone(store.load().PollPausedUntil)
+
+
+class UpdateCheckTests(unittest.TestCase):
+    """UpdateCheck truth table from the Windows smoke tests."""
+
+    def test_latest_version(self):
+        self.assertEqual(update_check.latest_version('{"tag_name":"v1.1.17","draft":false,"prerelease":false}'), "1.1.17")
+        self.assertIsNone(update_check.latest_version('{"tag_name":"v1.2.0","prerelease":true}'))
+        self.assertIsNone(update_check.latest_version('{"tag_name":"v1.2.0","draft":true}'))
+        self.assertIsNone(update_check.latest_version('{"tag_name":"v1.2.0-beta"}'))
+        self.assertIsNone(update_check.latest_version('{"message":"Not Found"}'))
+        self.assertIsNone(update_check.latest_version("not json"))
+
+    def test_is_newer(self):
+        self.assertTrue(update_check.is_newer("1.1.10", "1.1.9"))
+        self.assertFalse(update_check.is_newer("1.1.9", "1.1.10"))
+        self.assertFalse(update_check.is_newer("1.2", "1.2.0"))
+        self.assertTrue(update_check.is_newer("1.2.0.1", "1.2"))
+        self.assertFalse(update_check.is_newer("1.2.0", "unknown"))
+        self.assertFalse(update_check.is_newer("v1.3.1", "1.3.1"))
+
+    def test_schedule(self):
+        self.assertTrue(update_check.is_due(None, NOW))
+        self.assertEqual(update_check.next_check(NOW, True), NOW + timedelta(hours=24))
+        self.assertEqual(update_check.next_check(NOW, False), NOW + timedelta(hours=1))
+        self.assertFalse(update_check.is_due(NOW + timedelta(hours=1), NOW))
 
 
 class LocalizationTests(unittest.TestCase):

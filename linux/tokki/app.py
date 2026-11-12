@@ -18,7 +18,7 @@ from pathlib import Path
 import gi
 
 gi.require_version("Gtk", "3.0")
-from gi.repository import GLib, Gtk  # noqa: E402
+from gi.repository import Gio, GLib, Gtk  # noqa: E402
 
 try:
     gi.require_version("AyatanaAppIndicator3", "0.1")
@@ -34,12 +34,12 @@ except (ValueError, ImportError):
     Notify = None
 
 from . import VERSION, autostart
-from .core import alerts, display, paths
+from .core import alerts, display, pause, paths, update_check
 from .core.cache import CacheStore, apply_cache_policy
 from .core.cli_refresh import ClaudeCliRefresher
 from .core.client import UsageClient
 from .core.models import AppLanguage, DisplayMode, Provider, ProviderLabelStyle, ProviderUsage, UsageSnapshot, UsageSource
-from .core.settings import SettingsStore
+from .core.settings import SettingsStore, paused_until
 from .i18n import Localizer
 
 RESOURCES = Path(__file__).resolve().parent / "resources"
@@ -48,6 +48,8 @@ FIVE_HOUR_THRESHOLDS = (0, 10, 20, 30, 50)
 SEVEN_DAY_THRESHOLDS = (0, 5, 10, 20, 30)
 RESET_ALERT_MINUTES = (0, 5, 10, 15, 30, 60)
 COUNTDOWN_TICK_SECONDS = 30
+# After the machine wakes, wait for the network to come back before fetching.
+WAKE_REFRESH_DELAY_SECONDS = 10
 
 
 def _now() -> datetime:
@@ -80,6 +82,10 @@ class TokkiApp:
         self.last_readings = alerts.last_readings({}, self.snapshot) if self.snapshot else {}
         self.refreshing = False
         self.poll_source: int | None = None
+        self.wake_source: int | None = None
+        self.checking_for_updates = False
+        self.next_update_check_at: datetime | None = None
+        self.available_update: str | None = None
         # Autostart lives in the desktop's own folder; the file is the truth.
         self.settings.LaunchAtLogin = autostart.is_enabled()
 
@@ -93,6 +99,7 @@ class TokkiApp:
 
         self.render()
         self.schedule_polling()
+        self.watch_for_wake()
         GLib.timeout_add_seconds(COUNTDOWN_TICK_SECONDS, self._tick)
         GLib.idle_add(self.refresh)
 
@@ -124,10 +131,53 @@ class TokkiApp:
 
     def _tick(self) -> bool:
         self.render_label()
+        if self.is_paused():
+            # Keep the menu's pause countdown fresh, and lift a lapsed pause.
+            self.indicator.set_menu(self.build_menu())
         return True
+
+    def is_paused(self) -> bool:
+        return pause.is_paused(paused_until(self.settings), _now())
+
+    def watch_for_wake(self) -> None:
+        """logind says PrepareForSleep(false) on resume; refresh a little after."""
+        try:
+            bus = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
+        except GLib.Error as error:
+            print(f"tokki: no system bus, no refresh on wake: {error}", file=sys.stderr)
+            return
+        bus.signal_subscribe(
+            "org.freedesktop.login1", "org.freedesktop.login1.Manager", "PrepareForSleep",
+            "/org/freedesktop/login1", None, Gio.DBusSignalFlags.NONE, self._on_prepare_for_sleep,
+        )
+        self._system_bus = bus
+
+    def _on_prepare_for_sleep(self, _bus, _sender, _path, _iface, _signal, params) -> None:
+        going_to_sleep = params.unpack()[0]
+        if going_to_sleep:
+            return
+        if self.wake_source is not None:
+            GLib.source_remove(self.wake_source)
+        self.wake_source = GLib.timeout_add_seconds(WAKE_REFRESH_DELAY_SECONDS, self._wake_refresh)
+
+    def _wake_refresh(self) -> bool:
+        self.wake_source = None
+        self.refresh()
+        return False
+
+    def refresh_now(self, *_args) -> None:
+        """A manual refresh is an explicit request to fetch, so it lifts a pause."""
+        if self.is_paused():
+            self.settings.PollPausedUntil = None
+            self.save_settings()
+        self.refresh()
 
     def refresh(self, *_args) -> bool:
         if self.refreshing:
+            return False
+        if self.is_paused():
+            # Skip the network fetch while paused.
+            self.render()
             return False
         self.refreshing = True
         claude, codex = self.settings.ClaudeEnabled, self.settings.CodexEnabled
@@ -162,6 +212,30 @@ class TokkiApp:
             self.cache_store.save(merged)
         self.notify(merged, now)
         self.render()
+        self.check_for_updates_if_due()
+        return False
+
+    # --- update check -------------------------------------------------------------
+
+    def check_for_updates_if_due(self) -> None:
+        """Rides the refresh; update_check.is_due keeps it to once a day."""
+        now = _now()
+        if not self.settings.CheckForUpdates or self.checking_for_updates or not update_check.is_due(self.next_update_check_at, now):
+            return
+        self.checking_for_updates = True
+
+        def work():
+            latest = update_check.fetch_latest_version()
+            GLib.idle_add(self._apply_update_check, now, latest)
+
+        threading.Thread(target=work, name="tokki-update-check", daemon=True).start()
+
+    def _apply_update_check(self, attempted_at: datetime, latest: str | None) -> bool:
+        self.checking_for_updates = False
+        self.next_update_check_at = update_check.next_check(attempted_at, latest is not None)
+        if latest is not None and self.settings.CheckForUpdates:
+            self.available_update = latest if update_check.is_newer(latest, VERSION) else None
+            self.render()
         return False
 
     # --- notifications -----------------------------------------------------------
@@ -240,6 +314,13 @@ class TokkiApp:
             item.set_sensitive(False)
             menu.append(item)
 
+        if self.available_update and self.settings.CheckForUpdates:
+            # Opens the release page; installing the new .deb stays manual.
+            update = Gtk.MenuItem(label=text("update_available", version="v" + self.available_update) + " — " + text("download_update"))
+            update.connect("activate", lambda *_: self._open(update_check.RELEASES_PAGE))
+            menu.append(update)
+            menu.append(Gtk.SeparatorMenuItem())
+
         if self.snapshot is None:
             info(text("loading"))
         else:
@@ -251,8 +332,9 @@ class TokkiApp:
 
         menu.append(Gtk.SeparatorMenuItem())
         refresh = Gtk.MenuItem(label=text("refresh_now"))
-        refresh.connect("activate", self.refresh)
+        refresh.connect("activate", self.refresh_now)
         menu.append(refresh)
+        self._append_pause_controls(menu, now)
         menu.append(Gtk.SeparatorMenuItem())
 
         menu.append(self._radio_submenu(text("display"), [
@@ -286,6 +368,7 @@ class TokkiApp:
             ("한국어", AppLanguage.KOREAN),
         ], self.settings.Language, lambda value: self._set("Language", value)))
         menu.append(self._check(text("launch_at_login"), self.settings.LaunchAtLogin, self._set_autostart))
+        menu.append(self._check(text("check_for_updates"), self.settings.CheckForUpdates, self._set_check_for_updates))
 
         menu.append(Gtk.SeparatorMenuItem())
         folder = Gtk.MenuItem(label=text("open_data_folder"))
@@ -298,6 +381,36 @@ class TokkiApp:
 
         menu.show_all()
         return menu
+
+    def _append_pause_controls(self, menu: Gtk.Menu, now: datetime) -> None:
+        text = self.text
+        until = paused_until(self.settings)
+        if pause.is_paused(until, now):
+            left = text("pause_until_resumed") if pause.is_indefinite(until, now) else pause.duration_text(pause.remaining(until, now).total_seconds())
+            item = Gtk.MenuItem(label=f"{text('updates_paused')}: {left}")
+            item.set_sensitive(False)
+            menu.append(item)
+            resume = Gtk.MenuItem(label=text("resume_now"))
+            resume.connect("activate", lambda *_: self._pause(None, resume=True))
+            menu.append(resume)
+        root = Gtk.MenuItem(label=text("pause_polling"))
+        submenu = Gtk.Menu()
+        for label, duration in ((text("pause_1h"), timedelta(hours=1)), (text("pause_3h"), timedelta(hours=3)), (text("pause_until_resumed"), None)):
+            item = Gtk.MenuItem(label=label)
+            item.connect("activate", lambda _w, d=duration: self._pause(d))
+            submenu.append(item)
+        root.set_submenu(submenu)
+        menu.append(root)
+
+    def _pause(self, duration: timedelta | None, resume: bool = False) -> None:
+        if resume:
+            self.settings.PollPausedUntil = None
+        else:
+            self.settings.PollPausedUntil = pause.pause_until(duration, _now()).isoformat()
+        self.save_settings()
+        GLib.idle_add(lambda: (self.render(), False)[1])
+        if resume:
+            GLib.idle_add(self.refresh)
 
     def _alert_thresholds_menu(self) -> Gtk.MenuItem:
         text = self.text
@@ -364,13 +477,24 @@ class TokkiApp:
             print(f"tokki: could not change autostart: {error}", file=sys.stderr)
         self._set("LaunchAtLogin", autostart.is_enabled())
 
+    def _set_check_for_updates(self, enabled: bool) -> None:
+        if not enabled:
+            self.available_update = None
+        self._set("CheckForUpdates", enabled)
+        if enabled:
+            self.next_update_check_at = None
+            GLib.idle_add(lambda: (self.check_for_updates_if_due(), False)[1])
+
+    def _open(self, target: str) -> None:
+        try:
+            subprocess.Popen(["xdg-open", target], start_new_session=True)
+        except OSError as error:
+            print(f"tokki: could not open {target}: {error}", file=sys.stderr)
+
     def _open_folder(self) -> None:
         folder = paths.app_data_directory()
         folder.mkdir(parents=True, exist_ok=True)
-        try:
-            subprocess.Popen(["xdg-open", str(folder)], start_new_session=True)
-        except OSError as error:
-            print(f"tokki: could not open {folder}: {error}", file=sys.stderr)
+        self._open(str(folder))
 
 
 def main(argv: list[str] | None = None) -> int:
