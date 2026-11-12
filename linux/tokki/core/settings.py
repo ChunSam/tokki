@@ -9,6 +9,9 @@ import os
 from dataclasses import dataclass, field, fields
 from pathlib import Path
 
+from datetime import datetime
+from typing import Optional
+
 from . import paths
 from .models import AppLanguage, DisplayMode, ProviderLabelStyle
 
@@ -31,6 +34,11 @@ class AppSettings:
     StaleToleranceHours: int = 12
     ShowResetCountdown: bool = True
     RenewClaudeTokenWithCli: bool = True
+    # Ask GitHub once a day whether a newer release is out.
+    CheckForUpdates: bool = True
+    # ISO 8601 instant polling resumes; None is not paused. Read through
+    # paused_until() so a malformed value means "not paused".
+    PollPausedUntil: Optional[str] = None
     extra: dict = field(default_factory=dict, repr=False)
 
 
@@ -52,6 +60,9 @@ def from_dict(raw: dict) -> AppSettings:
         try:
             if key in _ENUMS:
                 value = _ENUMS[key](value)
+            elif key == "PollPausedUntil":
+                if value is not None and not isinstance(value, str):
+                    continue
             elif isinstance(default, bool):
                 if not isinstance(value, bool):
                     continue
@@ -64,6 +75,11 @@ def from_dict(raw: dict) -> AppSettings:
     # Never poll faster than the floor, whatever an older file says.
     settings.RefreshIntervalSeconds = max(MINIMUM_REFRESH_SECONDS, settings.RefreshIntervalSeconds)
     return settings
+
+
+def paused_until(settings: AppSettings) -> datetime | None:
+    from .parser import parse_iso
+    return parse_iso(settings.PollPausedUntil) if settings.PollPausedUntil else None
 
 
 def to_dict(settings: AppSettings) -> dict:
