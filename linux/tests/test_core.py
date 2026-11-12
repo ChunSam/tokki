@@ -335,10 +335,20 @@ class SettingsTests(unittest.TestCase):
 
 
 class AlertTests(unittest.TestCase):
+    """Same truth tables as the alert section of windows/TokenTracker.Windows.Tests."""
+
+    EN = staticmethod(Localizer(AppLanguage.ENGLISH).text)
+    KO = staticmethod(Localizer(AppLanguage.KOREAN).text)
+
+    def ids(self, snapshot, settings, now=NOW):
+        return [c.id for c in alerts.candidates(snapshot, settings, now, self.EN)]
+
     def test_low_alerts_fire_once_until_cleared(self):
         snap = UsageSnapshot(usage(five=15, seven=50), usage(Provider.CODEX, seven=8, reset7=NOW + timedelta(days=1)), NOW)
-        active = alerts.candidates(snap, True, 20, 10, NOW)
+        active = alerts.candidates(snap, alerts.AlertSettings(True, 20, 10, 0), NOW, self.EN)
         self.assertEqual([c.id for c in active], ["claude-5h-low", "codex-7d-low"])
+        self.assertEqual(active[0].title, "5h usage is low")
+        self.assertEqual(active[0].body, "Claude 5h 15% <= 20%")
         fresh, delivered = alerts.to_deliver(active, set())
         self.assertEqual(len(fresh), 2)
         fresh, delivered = alerts.to_deliver(active, delivered)
@@ -346,10 +356,89 @@ class AlertTests(unittest.TestCase):
         fresh, delivered = alerts.to_deliver([], delivered)
         self.assertEqual(delivered, set())
 
-    def test_reset_window_and_disabled(self):
+    def test_low_alert_skips_reset_window_and_disabled(self):
         snap = UsageSnapshot(usage(five=5, reset5=NOW - timedelta(minutes=1)), usage(Provider.CODEX), NOW)
-        self.assertEqual(alerts.candidates(snap, True, 20, 10, NOW), [])
-        self.assertEqual(alerts.candidates(UsageSnapshot(usage(five=5), usage(Provider.CODEX), NOW), False, 20, 10, NOW), [])
+        self.assertEqual(self.ids(snap, alerts.AlertSettings(True, 20, 10, 0)), [])
+        snap = UsageSnapshot(usage(five=5), usage(Provider.CODEX), NOW)
+        self.assertEqual(self.ids(snap, alerts.AlertSettings(False, 20, 10, 10)), [])
+
+    def reset_bodies(self, unused5h, source=UsageSource.API, threshold=20, text=None):
+        snap = UsageSnapshot(
+            usage(five=unused5h, seven=90, reset5=NOW + timedelta(minutes=5), reset7=NOW + timedelta(days=3), source=source),
+            ProviderUsage.unavailable(Provider.CODEX, "Disabled", NOW), NOW)
+        found = alerts.candidates(snap, alerts.AlertSettings(True, threshold, 10, 10), NOW, text or self.EN)
+        return " | ".join(c.body for c in found if "-reset-" in c.id)
+
+    def test_reset_warnings(self):
+        self.assertEqual(self.reset_bodies(60), "Claude 5h resets in 5m with 60% unused")
+        self.assertEqual(self.reset_bodies(60, text=self.KO), "Claude 5h 5m 후 리셋 — 60% 남음")
+        self.assertEqual(self.reset_bodies(20), "")
+        self.assertEqual(self.reset_bodies(21), "Claude 5h resets in 5m with 21% unused")
+        self.assertEqual(self.reset_bodies(1, threshold=0), "Claude 5h resets in 5m with 1% unused")
+        self.assertEqual(self.reset_bodies(0, threshold=0), "")
+        self.assertEqual(self.reset_bodies(None), "")
+        self.assertEqual(self.reset_bodies(60, UsageSource.STALE_CACHE), "")
+        self.assertEqual(self.reset_bodies(60, UsageSource.STATUS_LINE), "Claude 5h resets in 5m with 60% unused")
+
+    def stalled_ids(self, age, source, stalled_after):
+        snap = UsageSnapshot(
+            usage(five=55, seven=70, source=source, updated=NOW - age),
+            usage(Provider.CODEX, five=80, seven=90), NOW)
+        return self.ids(snap, alerts.AlertSettings(True, 0, 0, 0, stalled_after))
+
+    def test_stalled(self):
+        self.assertEqual(self.stalled_ids(timedelta(minutes=90), UsageSource.STALE_CACHE, timedelta(minutes=30)), ["claude-stalled"])
+        self.assertEqual(self.stalled_ids(timedelta(minutes=10), UsageSource.STALE_CACHE, timedelta(minutes=30)), [])
+        self.assertEqual(self.stalled_ids(timedelta(minutes=90), UsageSource.API, timedelta(minutes=30)), [])
+        self.assertEqual(self.stalled_ids(timedelta(minutes=90), UsageSource.STALE_CACHE, timedelta(0)), [])
+        self.assertEqual(alerts.stalled_threshold(300), timedelta(minutes=30))
+        self.assertEqual(alerts.stalled_threshold(1800), timedelta(minutes=90))
+        snap = UsageSnapshot(usage(five=55, source=UsageSource.STALE_CACHE, updated=NOW - timedelta(minutes=95)), usage(Provider.CODEX), NOW)
+        body = alerts.candidates(snap, alerts.AlertSettings(True, 0, 0, 0, timedelta(minutes=30)), NOW, self.KO)[0].body
+        self.assertEqual(body, "Claude 마지막 측정 1h35m 전")
+
+    # Freed up: a window that had run low, measured again after its reset.
+    FREED_NOW = datetime(2027, 1, 15, 8, 0, tzinfo=timezone.utc)
+    FREED = alerts.AlertSettings(True, 20, 10, 0)
+
+    def reading(self, five, reset5, at, source=UsageSource.API):
+        return ProviderUsage(Provider.CLAUDE, five, 80, reset5, None, source, None, None, at)
+
+    def claude_only(self, claude):
+        return UsageSnapshot(claude, ProviderUsage.unavailable(Provider.CODEX, "Disabled", claude.updated_at), claude.updated_at)
+
+    def freed_ids(self, before, after, settings=None):
+        previous = {Provider.CLAUDE: before} if before else {}
+        return [c.id for c in alerts.freed_up_candidates(previous, self.claude_only(after), settings or self.FREED, self.EN)]
+
+    def test_freed_up(self):
+        now = self.FREED_NOW
+        passed = now - timedelta(seconds=60)
+        low = self.reading(8, passed, now - timedelta(seconds=600))
+        refilled = self.reading(100, None, now)
+        self.assertEqual(self.freed_ids(low, refilled), [f"claude-5h-freed-{int(passed.timestamp())}"])
+        self.assertEqual(self.freed_ids(self.reading(50, passed, now - timedelta(seconds=600)), refilled), [])
+        self.assertEqual(self.freed_ids(
+            self.reading(8, now + timedelta(seconds=600), now - timedelta(seconds=600)),
+            self.reading(30, now + timedelta(seconds=600), now)), [])
+        self.assertEqual(self.freed_ids(low, self.reading(100, None, now, UsageSource.STALE_CACHE)), [])
+        self.assertEqual(self.freed_ids(low, self.reading(15, None, now)), [])
+        self.assertEqual(self.freed_ids(None, refilled), [])
+        self.assertEqual(self.freed_ids(low, refilled, alerts.AlertSettings(True, 0, 10, 0)), [])
+        body = alerts.freed_up_candidates({Provider.CLAUDE: low}, self.claude_only(refilled), self.FREED, self.KO)[0].body
+        self.assertEqual(body, "Claude 5h 리셋됨 — 잔량 100%")
+
+    def test_last_readings(self):
+        now = self.FREED_NOW
+        passed = now - timedelta(seconds=60)
+        low = self.reading(8, passed, now - timedelta(seconds=600))
+        refilled = self.reading(100, None, now)
+        cached = self.reading(8, passed, now, UsageSource.STALE_CACHE)
+        seeded = alerts.last_readings({}, self.claude_only(cached))
+        self.assertEqual(seeded[Provider.CLAUDE].remaining_5h, 8)
+        self.assertNotIn(Provider.CODEX, seeded)
+        self.assertEqual(alerts.last_readings({Provider.CLAUDE: low}, self.claude_only(cached))[Provider.CLAUDE], low)
+        self.assertEqual(alerts.last_readings({Provider.CLAUDE: low}, self.claude_only(refilled))[Provider.CLAUDE], refilled)
 
 
 class CliRefreshTests(unittest.TestCase):
