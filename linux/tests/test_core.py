@@ -16,7 +16,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from tokki import autostart  # noqa: E402
-from tokki.core import alerts, cache, cli_refresh, display, expiry, forecast, history, parser, pause, ratelimit, settings, statusline, update_check  # noqa: E402
+from tokki.core import alerts, cache, cli_refresh, cost, display, expiry, forecast, history, issues, parser, pause, ratelimit, settings, statusline, update_check  # noqa: E402
 from tokki.core.client import HttpResponse, UsageClient, retry_after  # noqa: E402
 from tokki.core.models import (  # noqa: E402
     AppLanguage, DisplayMode, ForecastWindow, Provider, ProviderLabelStyle, ProviderUsage, UsageSnapshot, UsageSource,
@@ -661,6 +661,192 @@ class ForecastTests(unittest.TestCase):
         self.assertIs(display.preferred_forecast_window(usage(five=50, seven=80)), ForecastWindow.FIVE_HOUR)
         self.assertIs(display.preferred_forecast_window(usage(Provider.CODEX, seven=80)), ForecastWindow.SEVEN_DAY)
         self.assertIs(display.preferred_forecast_window(usage()), ForecastWindow.FIVE_HOUR)
+
+
+class CostTests(unittest.TestCase):
+    """Subscription money, formatting and money alerts: Windows truth tables."""
+
+    EN = staticmethod(Localizer(AppLanguage.ENGLISH).text)
+    KO = staticmethod(Localizer(AppLanguage.KOREAN).text)
+    PRO = """{"extra_usage":{"is_enabled":false,"monthly_limit":null,"used_credits":null,"utilization":null,"currency":null,"decimal_places":null,"user_disabled":true},
+         "spend":{"used":{"amount_minor":0,"currency":"USD","exponent":2},"limit":null,"percent":0,"severity":"normal","enabled":false}}"""
+    PLUS = """{"plan_type":"plus","rate_limit":{"primary_window":{"used_percent":10,"limit_window_seconds":18000,"reset_at":1793700000}},
+         "credits":{"has_credits":false,"unlimited":false,"overage_limit_reached":false,"balance":"0"}}"""
+
+    def test_parsers(self):
+        D = cost.Decimal
+        self.assertIsNone(cost.claude_extra(self.PRO))
+        on = cost.claude_extra('{"spend":{"enabled":true,"used":{"amount_minor":186,"currency":"USD","exponent":2},"limit":{"amount_minor":500,"currency":"USD","exponent":2},"severity":"normal"}}')
+        self.assertEqual(on.used.value, D("1.86"))
+        self.assertEqual(on.limit.value, D("5"))
+        self.assertIsNone(cost.claude_extra('{"extra_usage":{"is_enabled":true,"used_credits":186}}'))
+        self.assertIsNone(cost.claude_extra('{"spend":{"enabled":true,"used":{"amount_minor":5,"currency":"USD","exponent":9}}}'))
+        self.assertIsNone(cost.claude_extra('{"five_hour":{"utilization":10}}'))
+        self.assertIsNone(cost.codex_credits('{"credits":{"has_credits":false,"balance":"0"}}'))
+        self.assertEqual(cost.codex_credits('{"credits":{"has_credits":true,"balance":"18.40"}}'), D("18.4"))
+        self.assertIsNone(cost.codex_credits('{"credits":{"has_credits":true,"balance":"lots"}}'))
+
+    def test_formatting(self):
+        def usd(text):
+            return cost.cost_text(cost.CostAmount(cost.Decimal(text)))
+        self.assertEqual(usd("0"), "$0.00")
+        self.assertEqual(usd("0.004"), "<$0.01")
+        self.assertEqual(usd("12.345"), "$12.35")
+        self.assertEqual(usd("999.99"), "$999.99")
+        self.assertEqual(usd("1234.5"), "$1.2K")
+        self.assertEqual(usd("1250"), "$1.3K")
+        self.assertEqual(usd("3400000"), "$3.4M")
+        self.assertEqual(usd("-2.5"), "-$2.50")
+        self.assertEqual(cost.cost_text(cost.CostAmount(cost.Decimal("12.3"), "eur")), "12.30 EUR")
+        self.assertEqual(cost.credits_text(cost.Decimal("18.4")), "18.40")
+        compact = lambda t: cost.cost_compact(cost.CostAmount(cost.Decimal(t)))  # noqa: E731
+        self.assertEqual(compact("42.18"), "$42")
+        self.assertEqual(compact("42.5"), "$43")
+        self.assertEqual(compact("3.07"), "$3.07")
+        self.assertEqual(compact("1234"), "$1.2K")
+
+    def test_budget_and_month(self):
+        from zoneinfo import ZoneInfo
+        D = cost.Decimal
+        self.assertEqual(cost.budget_percent(D("79.99"), D(100)), 79)
+        self.assertEqual(cost.reached_thresholds(D(80), D(100)), [80])
+        self.assertEqual(cost.reached_thresholds(D(100), D(100)), [80, 100])
+        self.assertEqual(cost.reached_thresholds(D(150), D(100)), [80, 100])
+        self.assertIsNone(cost.budget_percent(D(50), D(0)))
+        at = datetime(2026, 11, 30, 16, tzinfo=timezone.utc)
+        self.assertEqual(cost.month_key(at, ZoneInfo("Asia/Seoul")), "2026-12")
+        self.assertEqual(cost.month_key(at, timezone.utc), "2026-11")
+        self.assertEqual(cost.next_fetch(NOW, True), NOW + timedelta(minutes=10))
+        self.assertEqual(cost.next_fetch(NOW, False), NOW + timedelta(minutes=5))
+        self.assertTrue(cost.fetch_due(None, NOW))
+        self.assertFalse(cost.fetch_due(NOW + timedelta(seconds=1), NOW))
+
+    def test_subscription_lines(self):
+        pro = parser.parse_claude_usage('{"five_hour":{"utilization":20},"seven_day":{"utilization":40},' + self.PRO[1:], NOW)
+        self.assertIsNone(pro.extra_usage)
+        self.assertIsNone(cost.subscription_line(pro, self.EN))
+        paying = parser.parse_claude_usage('{"five_hour":{"utilization":20},"spend":{"enabled":true,"used":{"amount_minor":186,"currency":"USD","exponent":2},"limit":{"amount_minor":500,"currency":"USD","exponent":2},"severity":"normal"}}', NOW)
+        line = cost.subscription_line(paying, self.KO)
+        self.assertEqual((line.label, line.value, line.percent), ("추가 사용량", "$1.86 / $5.00", 37))
+        no_limit = paying.with_(extra_usage=cost.ClaudeExtraUsage(cost.CostAmount(cost.Decimal("1.86")), None, None))
+        self.assertEqual(cost.subscription_line(no_limit, self.EN).value, "$1.86")
+        self.assertIsNone(cost.subscription_line(no_limit, self.EN).percent)
+        other = paying.with_(extra_usage=cost.ClaudeExtraUsage(cost.CostAmount(cost.Decimal(2)), cost.CostAmount(cost.Decimal(5), "EUR"), None))
+        self.assertEqual(cost.subscription_line(other, self.EN).value, "$2.00")
+        plus = parser.parse_codex_usage(self.PLUS, NOW)
+        self.assertIsNone(plus.credit_balance)
+        self.assertIsNone(cost.subscription_line(plus, self.EN))
+        credits = parser.parse_codex_usage(self.PLUS.replace('"has_credits":false,"unlimited":false,"overage_limit_reached":false,"balance":"0"', '"has_credits":true,"balance":"18.4"'), NOW)
+        line = cost.subscription_line(credits, self.EN)
+        self.assertEqual((line.label, line.value, line.percent), ("Credit balance", "18.40", None))
+
+    def test_money_rides_cache_not_history(self):
+        paying = parser.parse_claude_usage('{"five_hour":{"utilization":20},"spend":{"enabled":true,"used":{"amount_minor":186,"currency":"USD","exponent":2},"severity":"warning"}}', NOW)
+        snap = UsageSnapshot(paying, parser.parse_codex_usage(self.PLUS.replace('"has_credits":false', '"has_credits":true').replace('"overage_limit_reached":false', '"overage_limit_reached":true').replace('"balance":"0"', '"balance":"3.5"'), NOW), NOW)
+        with tempfile.TemporaryDirectory() as tmp:
+            store = cache.CacheStore(Path(tmp) / "c.json")
+            store.save(snap)
+            self.assertEqual(store.load(timedelta(hours=1), NOW), snap)
+        recorded = history.measurements_only(snap)
+        self.assertIsNone(recorded.claude.extra_usage)
+        self.assertIsNone(recorded.codex.credit_balance)
+        self.assertIsNone(recorded.codex.credit_limit_reached)
+
+    def evaluate(self, snapshot, delivered=(), notifications=True, at=None):
+        return cost.evaluate_alerts(snapshot, list(delivered), notifications, at or datetime(2026, 11, 15, tzinfo=timezone.utc), self.KO, timezone.utc)
+
+    def claude_spend(self, spend):
+        return parser.parse_claude_usage('{"five_hour":{"utilization":20},"spend":' + spend + '}', NOW)
+
+    def test_money_alerts(self):
+        plus = parser.parse_codex_usage(self.PLUS, NOW)
+        warning = self.claude_spend('{"enabled":true,"used":{"amount_minor":410,"currency":"USD","exponent":2},"limit":{"amount_minor":500,"currency":"USD","exponent":2},"severity":"Warning"}')
+        result = self.evaluate(UsageSnapshot(warning, plus, NOW))
+        self.assertEqual([a.id for a in result.alerts], ["claude-extra-warning-2026-11"])
+        self.assertEqual(result.alerts[0].title, "Claude 추가 사용량")
+        self.assertEqual(result.alerts[0].body, "추가 사용량이 $4.10 / $5.00입니다.")
+        self.assertEqual(self.evaluate(UsageSnapshot(warning, plus, NOW), result.delivered).alerts, [])
+        normal = self.claude_spend('{"enabled":true,"used":{"amount_minor":100,"currency":"USD","exponent":2},"severity":"normal"}')
+        self.assertEqual(self.evaluate(UsageSnapshot(normal, plus, NOW)).alerts, [])
+        pro = self.claude_spend('{"used":{"amount_minor":0,"currency":"USD","exponent":2},"limit":null,"percent":0,"severity":"warning","enabled":false}')
+        self.assertEqual(self.evaluate(UsageSnapshot(pro, plus, NOW)).alerts, [])
+        self.assertIsNone(plus.credit_limit_reached)
+        limited = parser.parse_codex_usage(self.PLUS.replace('"has_credits":false', '"has_credits":true').replace('"overage_limit_reached":false', '"overage_limit_reached":true'), NOW)
+        self.assertTrue(limited.credit_limit_reached)
+        credits = self.evaluate(UsageSnapshot(pro, limited, NOW))
+        self.assertEqual([a.id for a in credits.alerts], ["codex-credits-limit-2026-11"])
+        self.assertEqual(credits.alerts[0].body, "Codex 크레딧 초과 사용 한도에 도달했습니다.")
+        no_credits = parser.parse_codex_usage(self.PLUS.replace('"overage_limit_reached":false', '"overage_limit_reached":true'), NOW)
+        self.assertIsNone(no_credits.credit_limit_reached)
+        off = self.evaluate(UsageSnapshot(warning, plus, NOW), ["claude-extra-warning-2026-11"], notifications=False)
+        self.assertEqual(off.alerts, [])
+        self.assertEqual(off.delivered, {"claude-extra-warning-2026-11"})
+        december = self.evaluate(None, ["claude-cost-100-2026-11"], at=datetime(2026, 12, 1, 1, tzinfo=timezone.utc))
+        self.assertEqual(december.delivered, set())
+
+
+class IssueTests(unittest.TestCase):
+    """UsageIssueFormatter and CredentialStoreAdvice truth tables."""
+
+    EN = staticmethod(Localizer(AppLanguage.ENGLISH).text)
+
+    def test_kinds(self):
+        K = issues.IssueKind
+        self.assertIs(issues.kind_of("Disabled"), K.DISABLED)
+        self.assertIs(issues.kind_of("HTTP 429 from Claude API; retrying after 5m"), K.RATE_LIMITED)
+        self.assertIs(issues.kind_of("Missing credentials"), K.MISSING_CREDENTIALS)
+        self.assertIs(issues.kind_of("Credentials expired for Codex API"), K.EXPIRED_CREDENTIALS)
+        self.assertIs(issues.kind_of("HTTP 401 from Claude API"), K.EXPIRED_CREDENTIALS)
+        self.assertIs(issues.kind_of("HTTP 403 from Codex API"), K.EXPIRED_CREDENTIALS)
+        self.assertIs(issues.kind_of("HTTP 500 from Claude API"), K.HTTP_STATUS)
+        self.assertIs(issues.kind_of("Timed out contacting Claude API"), K.TIMED_OUT)
+        self.assertIs(issues.kind_of("Network error: [Errno -2] Name or service not known"), K.NETWORK)
+
+    def test_issue_texts(self):
+        expired = ProviderUsage.unavailable(Provider.CLAUDE, "Credentials expired for Claude API", NOW)
+        found = issues.issue(expired, self.EN)
+        self.assertEqual(found.title, "Saved token expired")
+        self.assertIn("/login", found.recovery)
+        codex = issues.issue(ProviderUsage.unavailable(Provider.CODEX, "HTTP 401 from Codex API", NOW), self.EN)
+        self.assertIn("codex login", codex.recovery)
+        cached = issues.issue(usage(five=50, source=UsageSource.STALE_CACHE, error="Timed out contacting Claude API"), self.EN)
+        self.assertIs(cached.kind, issues.IssueKind.USING_CACHED_DATA)
+        self.assertEqual(cached.recovery, "Check your network connection and try again.")
+        self.assertIs(issues.issue(usage(five=50), self.EN).kind, issues.IssueKind.OK)
+        relayed = issues.issue(usage(five=50, source=UsageSource.STATUS_LINE, error="Credentials expired for Claude API"), self.EN)
+        self.assertIs(relayed.kind, issues.IssueKind.STATUS_LINE)
+        self.assertIn("/login", relayed.recovery)
+
+    def test_stale_store_line(self):
+        store = issues.CredentialSource("CredentialsFile", NOW)
+        expired = issues.issue(ProviderUsage.unavailable(Provider.CLAUDE, "HTTP 401", NOW), self.EN)
+        self.assertEqual(issues.stale_line(Provider.CLAUDE, expired, store, NOW + timedelta(hours=48), self.EN), "Credentials not refreshed in 2d 0h")
+        self.assertIsNone(issues.stale_line(Provider.CLAUDE, expired, store, NOW + issues.STALE_AFTER - timedelta(minutes=1), self.EN))
+        limited = issues.issue(ProviderUsage.unavailable(Provider.CLAUDE, "HTTP 429", NOW), self.EN)
+        self.assertIsNone(issues.stale_line(Provider.CLAUDE, limited, store, NOW + timedelta(hours=48), self.EN))
+        codex = issues.issue(ProviderUsage.unavailable(Provider.CODEX, "HTTP 401", NOW), self.EN)
+        self.assertIsNone(issues.stale_line(Provider.CODEX, codex, store, NOW + timedelta(hours=48), self.EN))
+        carried = issues.issue(usage(five=5, source=UsageSource.STALE_CACHE, error="credentials expired"), self.EN)
+        self.assertIsNotNone(issues.stale_line(Provider.CLAUDE, carried, store, NOW + timedelta(hours=48), self.EN))
+        self.assertIsNone(issues.stale_line(Provider.CLAUDE, expired, issues.CredentialSource("None", None), NOW + timedelta(hours=48), self.EN))
+
+    def test_diagnostics_text_has_no_secret(self):
+        from tokki import diagnostics
+        with tempfile.TemporaryDirectory() as tmp:
+            old = os.environ.get("XDG_CONFIG_HOME")
+            os.environ["XDG_CONFIG_HOME"] = tmp
+            try:
+                snap = UsageSnapshot(usage(five=50, seven=80), ProviderUsage.unavailable(Provider.CODEX, "HTTP 401 from Codex API", NOW), NOW)
+                report = diagnostics.diagnostics_text(settings.AppSettings(), [], snap, NOW, None, NOW)
+            finally:
+                if old is None:
+                    del os.environ["XDG_CONFIG_HOME"]
+                else:
+                    os.environ["XDG_CONFIG_HOME"] = old
+        self.assertTrue(report.startswith("Tokki Diagnostics"))
+        self.assertIn("Claude 5h remaining: 50%", report)
+        self.assertIn("Codex status: ExpiredCredentials", report)
+        self.assertIn("Claude money past plan: off", report)
 
 
 class LocalizationTests(unittest.TestCase):

@@ -86,9 +86,11 @@ def measurements_only(snapshot: UsageSnapshot) -> UsageSnapshot:
     """History records measurements, not re-displays of one: a cached or relayed
     reading would flatten the sparkline and tell the forecast usage stopped."""
     def only(usage: ProviderUsage) -> ProviderUsage:
+        # Money is not part of the record: every poll would copy the same balance.
+        without_money = usage.with_(extra_usage=None, credit_balance=None, credit_limit_reached=None)
         if usage.source is UsageSource.API:
-            return usage
-        return usage.with_(remaining_5h=None, remaining_7d=None)
+            return without_money
+        return without_money.with_(remaining_5h=None, remaining_7d=None)
 
     return UsageSnapshot(only(snapshot.claude), only(snapshot.codex), snapshot.updated_at)
 

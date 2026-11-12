@@ -18,7 +18,8 @@ from pathlib import Path
 import gi
 
 gi.require_version("Gtk", "3.0")
-from gi.repository import Gio, GLib, Gtk  # noqa: E402
+gi.require_version("Gdk", "3.0")
+from gi.repository import Gdk, Gio, GLib, Gtk  # noqa: E402
 
 try:
     gi.require_version("AyatanaAppIndicator3", "0.1")
@@ -33,8 +34,8 @@ try:
 except (ValueError, ImportError):
     Notify = None
 
-from . import VERSION, autostart
-from .core import alerts, display, forecast, history, pause, paths, update_check
+from . import VERSION, autostart, diagnostics
+from .core import alerts, cost, display, forecast, history, issues, pause, paths, update_check
 from .core.cache import CacheStore, apply_cache_policy
 from .core.cli_refresh import ClaudeCliRefresher
 from .core.client import UsageClient
@@ -89,6 +90,7 @@ class TokkiApp:
         self.checking_for_updates = False
         self.next_update_check_at: datetime | None = None
         self.available_update: str | None = None
+        self.last_success: datetime | None = None
         # Autostart lives in the desktop's own folder; the file is the truth.
         self.settings.LaunchAtLogin = autostart.is_enabled()
 
@@ -211,6 +213,10 @@ class TokkiApp:
             max_age=self._stale_tolerance(),
         )
         self.snapshot = merged
+        # When the provider measured, not when this poll ran.
+        measured = [u.updated_at for u in (current.claude, current.codex) if u.source in (UsageSource.API, UsageSource.STATUS_LINE)]
+        if measured:
+            self.last_success = max(measured)
         if merged.claude.is_available or merged.codex.is_available:
             self.cache_store.save(merged)
         # Only this poll's API measurements enter the record.
@@ -264,6 +270,7 @@ class TokkiApp:
         active += alerts.freed_up_candidates(previous, snapshot, settings, self.text)
         active += self._forecast_alerts(snapshot)
         fresh, self.delivered_alerts = alerts.to_deliver(active, self.delivered_alerts)
+        fresh += self._cost_alerts(snapshot, now)
         if Notify is None:
             return
         for candidate in fresh:
@@ -271,6 +278,15 @@ class TokkiApp:
                 Notify.Notification.new(candidate.title, candidate.body, "tokki").show()
             except GLib.Error as error:
                 print(f"tokki: notification failed: {error}", file=sys.stderr)
+
+    def _cost_alerts(self, snapshot: UsageSnapshot, now: datetime) -> list[alerts.AlertCandidate]:
+        """Once per local month each, remembered in settings across relaunches."""
+        result = cost.evaluate_alerts(snapshot, self.settings.DeliveredCostAlerts, self.settings.NotificationsEnabled, now, self.text)
+        delivered = sorted(result.delivered)
+        if delivered != self.settings.DeliveredCostAlerts:
+            self.settings.DeliveredCostAlerts = delivered
+            self.save_settings()
+        return result.alerts
 
     def _forecast_alerts(self, snapshot: UsageSnapshot) -> list[alerts.AlertCandidate]:
         if not self.settings.DepletionAlertEnabled:
@@ -316,8 +332,15 @@ class TokkiApp:
             f"7d {display.format_percent(usage.remaining_7d)} · {seven}"
         )
         lines = [line]
-        if usage.source is UsageSource.STATUS_LINE:
-            lines.append("    " + text("source_statusline"))
+        found = issues.issue(usage, text)
+        if found.kind is not issues.IssueKind.OK:
+            lines.append(f"    {found.title}" + (f" — {found.recovery}" if found.recovery else ""))
+            stale = issues.stale_line(usage.provider, found, issues.CredentialSource.detect(paths.claude_credentials_path()), now, text)
+            if stale:
+                lines.append("    " + stale)
+        money = cost.subscription_line(usage, text)
+        if money:
+            lines.append(f"    {money.label}: {money.value}")
         if self.settings.ShowForecast:
             window = display.preferred_forecast_window(usage)
             reset_at = usage.reset_at_5h if window is ForecastWindow.FIVE_HOUR else usage.reset_at_7d
@@ -327,8 +350,6 @@ class TokkiApp:
             pace_line = forecast.pace_menu_line(usage, text)
             if pace_line:
                 lines.append("    " + pace_line)
-        if usage.error:
-            lines.append("    " + usage.error[:90])
         return lines
 
     def build_menu(self) -> Gtk.Menu:
@@ -399,6 +420,7 @@ class TokkiApp:
         menu.append(self._check(text("check_for_updates"), self.settings.CheckForUpdates, self._set_check_for_updates))
 
         menu.append(Gtk.SeparatorMenuItem())
+        menu.append(self._diagnostics_menu())
         folder = Gtk.MenuItem(label=text("open_data_folder"))
         folder.connect("activate", lambda *_: self._open_folder())
         menu.append(folder)
@@ -466,6 +488,36 @@ class TokkiApp:
         submenu.append(export)
         root.set_submenu(submenu)
         return root
+
+    def _diagnostics_menu(self) -> Gtk.MenuItem:
+        text = self.text
+        root = Gtk.MenuItem(label=text("diagnostics"))
+        submenu = Gtk.Menu()
+        copy = Gtk.MenuItem(label=text("copy_diagnostics"))
+        copy.connect("activate", lambda *_: self._copy_diagnostics())
+        submenu.append(copy)
+        submenu.append(Gtk.SeparatorMenuItem())
+        for label, target in ((text("open_claude_credentials"), paths.claude_credentials_path()), (text("open_codex_auth"), paths.codex_auth_path())):
+            item = Gtk.MenuItem(label=label)
+            # The folder, not the file: opening the file would show the token.
+            item.connect("activate", lambda _w, t=target: self._open(str(t.parent)))
+            item.set_sensitive(target.parent.is_dir())
+            submenu.append(item)
+        root.set_submenu(submenu)
+        return root
+
+    def diagnostics_text(self) -> str:
+        return diagnostics.diagnostics_text(
+            self.settings, self.history, self.snapshot, self.last_success,
+            self.client.cli_refresher.last_attempt if self.client.cli_refresher else None, _now())
+
+    def _copy_diagnostics(self) -> None:
+        Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD).set_text(self.diagnostics_text(), -1)
+        if Notify is not None:
+            try:
+                Notify.Notification.new("Tokki", self.text("diagnostics_copied"), "tokki").show()
+            except GLib.Error:
+                pass
 
     def _export_csv(self) -> bool:
         text = self.text
