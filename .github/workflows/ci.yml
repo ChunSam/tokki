@@ -128,7 +128,8 @@ jobs:
       # at draw time, which only a real draw shows.
       - name: GUI smoke (details window)
         run: |
-          sudo apt-get install -y xvfb
+          # A Korean font, so the Korean screenshots can be read.
+          sudo apt-get install -y xvfb fonts-nanum
           xvfb-run -a python3 linux/tests/gui_smoke.py "${{ runner.temp }}/gui-smoke"
 
       - name: Upload GUI smoke screenshots

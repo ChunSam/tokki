@@ -339,7 +339,10 @@ class TokkiApp:
         seven = display.format_window_reset(usage.remaining_7d, usage.reset_at_7d, now, text, reported)
         if usage.source is UsageSource.STALE_CACHE:
             # A cached reading's reset times keep ticking while its value stands still.
-            five = seven = text("source_cache")
+            if usage.remaining_5h is not None:
+                five = text("source_cache")
+            if usage.remaining_7d is not None:
+                seven = text("source_cache")
         line = (
             f"{usage.display_name}{' (' + usage.plan + ')' if usage.plan else ''}  "
             f"5h {display.format_percent(usage.remaining_5h)} · {five}   "
