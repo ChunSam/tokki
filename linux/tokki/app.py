@@ -44,11 +44,6 @@ from .core.settings import SettingsStore, paused_until
 from .i18n import Localizer
 
 RESOURCES = Path(__file__).resolve().parent / "resources"
-REFRESH_CHOICES = (60, 120, 300, 600, 900)
-FIVE_HOUR_THRESHOLDS = (0, 10, 20, 30, 50)
-SEVEN_DAY_THRESHOLDS = (0, 5, 10, 20, 30)
-RESET_ALERT_MINUTES = (0, 5, 10, 15, 30, 60)
-HISTORY_RETENTION_DAYS = (3, 7, 14, 30)
 COUNTDOWN_TICK_SECONDS = 30
 # After the machine wakes, wait for the network to come back before fetching.
 WAKE_REFRESH_DELAY_SECONDS = 10
@@ -487,45 +482,13 @@ class TokkiApp:
         self._append_pause_controls(menu, now)
         menu.append(Gtk.SeparatorMenuItem())
 
-        menu.append(self._radio_submenu(text("display"), [
-            (text("display_lowest"), DisplayMode.LOWEST_REMAINING),
-            (text("display_both"), DisplayMode.BOTH),
-            (text("display_claude"), DisplayMode.CLAUDE_ONLY),
-            (text("display_codex"), DisplayMode.CODEX_ONLY),
-        ], self.settings.DisplayMode, lambda value: self._set("DisplayMode", value)))
-        menu.append(self._radio_submenu(text("label_style"), [
-            (text("label_abbreviation"), ProviderLabelStyle.ABBREVIATION),
-            (text("label_full"), ProviderLabelStyle.ICON),
-        ], self.settings.ProviderLabelStyle, lambda value: self._set("ProviderLabelStyle", value)))
-        menu.append(self._radio_submenu(text("refresh_interval"), [
-            (text("minutes", n=seconds // 60), seconds) for seconds in REFRESH_CHOICES
-        ], self.settings.RefreshIntervalSeconds, self._set_interval))
-
-        providers = Gtk.MenuItem(label=text("providers"))
-        provider_menu = Gtk.Menu()
-        provider_menu.append(self._check("Claude", self.settings.ClaudeEnabled, lambda on: self._set("ClaudeEnabled", on, refresh=True)))
-        provider_menu.append(self._check("Codex", self.settings.CodexEnabled, lambda on: self._set("CodexEnabled", on, refresh=True)))
-        providers.set_submenu(provider_menu)
-        menu.append(providers)
-
-        menu.append(self._check(text("show_countdown"), self.settings.ShowResetCountdown, lambda on: self._set("ShowResetCountdown", on)))
+        # Only what is reached for often lives here; everything else is in the
+        # settings tab, one click away through "Details & Settings…".
+        menu.append(self._display_menu())
         menu.append(self._check(text("notifications"), self.settings.NotificationsEnabled, lambda on: self._set("NotificationsEnabled", on)))
-        menu.append(self._alert_thresholds_menu())
-        menu.append(self._history_menu())
-        menu.append(self._check(text("renew_claude"), self.settings.RenewClaudeTokenWithCli, lambda on: self._set("RenewClaudeTokenWithCli", on)))
-        menu.append(self._radio_submenu(text("language"), [
-            (text("language_system"), AppLanguage.SYSTEM),
-            ("English", AppLanguage.ENGLISH),
-            ("한국어", AppLanguage.KOREAN),
-        ], self.settings.Language, lambda value: self._set("Language", value)))
-        menu.append(self._check(text("launch_at_login"), self.settings.LaunchAtLogin, self._set_autostart))
-        menu.append(self._check(text("check_for_updates"), self.settings.CheckForUpdates, self._set_check_for_updates))
 
         menu.append(Gtk.SeparatorMenuItem())
         menu.append(self._diagnostics_menu())
-        folder = Gtk.MenuItem(label=text("open_data_folder"))
-        folder.connect("activate", lambda *_: self._open_folder())
-        menu.append(folder)
         info(f"Tokki {VERSION}")
         quit_item = Gtk.MenuItem(label=text("quit"))
         quit_item.connect("activate", lambda *_: Gtk.main_quit())
@@ -564,33 +527,6 @@ class TokkiApp:
         if resume:
             GLib.idle_add(self.refresh)
 
-    def _history_menu(self) -> Gtk.MenuItem:
-        text = self.text
-        root = Gtk.MenuItem(label=text("history"))
-        submenu = Gtk.Menu()
-
-        def info(label: str) -> None:
-            item = Gtk.MenuItem(label=label)
-            item.set_sensitive(False)
-            submenu.append(item)
-
-        info(history.trend_summary(self.history, self.snapshot, text) if self.snapshot else text("not_enough_history"))
-        for provider in (Provider.CLAUDE, Provider.CODEX):
-            window = display.preferred_forecast_window(self.snapshot.usage(provider)) if self.snapshot else ForecastWindow.FIVE_HOUR
-            line = history.sparkline_text(history.sparkline_series(self.history, provider, window))
-            if line:
-                info(f"{provider.display_name} {forecast.short_label(window)} {line}")
-        submenu.append(Gtk.SeparatorMenuItem())
-        submenu.append(self._check(text("show_forecast"), self.settings.ShowForecast, lambda on: self._set("ShowForecast", on)))
-        submenu.append(self._radio_submenu(text("history_retention"), [
-            (text("days", n=d), d) for d in HISTORY_RETENTION_DAYS
-        ], self.settings.HistoryRetentionDays, lambda v: self._set("HistoryRetentionDays", v)))
-        export = Gtk.MenuItem(label=text("export_history_csv"))
-        export.connect("activate", lambda *_: GLib.idle_add(self._export_csv))
-        submenu.append(export)
-        root.set_submenu(submenu)
-        return root
-
     def _diagnostics_menu(self) -> Gtk.MenuItem:
         text = self.text
         root = Gtk.MenuItem(label=text("diagnostics"))
@@ -605,6 +541,9 @@ class TokkiApp:
             item.connect("activate", lambda _w, t=target: self._open(str(t.parent)))
             item.set_sensitive(target.parent.is_dir())
             submenu.append(item)
+        folder = Gtk.MenuItem(label=text("open_data_folder"))
+        folder.connect("activate", lambda *_: self._open_folder())
+        submenu.append(folder)
         root.set_submenu(submenu)
         return root
 
@@ -628,6 +567,8 @@ class TokkiApp:
         dialog = Gtk.FileChooserDialog(title=text("export_history_csv").rstrip(".…"), action=Gtk.FileChooserAction.SAVE)
         dialog.add_buttons(text("cancel"), Gtk.ResponseType.CANCEL, text("save"), Gtk.ResponseType.ACCEPT)
         dialog.set_do_overwrite_confirmation(True)
+        if self.window is not None and self.window.get_visible():
+            dialog.set_transient_for(self.window)
         dialog.set_current_name(f"tokki-history-{_now().astimezone():%Y%m%d}.csv")
         dialog.set_current_folder(str(Path.home()))
         try:
@@ -640,48 +581,42 @@ class TokkiApp:
             dialog.destroy()
         return False
 
-    def _alert_thresholds_menu(self) -> Gtk.MenuItem:
+    def _display_menu(self) -> Gtk.MenuItem:
+        """What the panel shows: which number, how providers are named, and
+        whether the reset countdown rides along. One submenu, three groups."""
         text = self.text
-
-        def percent(value: int) -> str:
-            return text("disabled") if value == 0 else f"{value}%"
-
-        parent = Gtk.MenuItem(label=text("alert_thresholds"))
+        root = Gtk.MenuItem(label=text("display"))
         submenu = Gtk.Menu()
-        submenu.append(self._radio_submenu(text("five_hour_threshold"), [
-            (percent(v), v) for v in FIVE_HOUR_THRESHOLDS
-        ], self.settings.FiveHourAlertThreshold, lambda v: self._set("FiveHourAlertThreshold", v)))
-        submenu.append(self._radio_submenu(text("seven_day_threshold"), [
-            (percent(v), v) for v in SEVEN_DAY_THRESHOLDS
-        ], self.settings.SevenDayAlertThreshold, lambda v: self._set("SevenDayAlertThreshold", v)))
-        submenu.append(self._radio_submenu(text("reset_alert_minutes"), [
-            (text("disabled") if v == 0 else text("minutes_before", n=v), v) for v in RESET_ALERT_MINUTES
-        ], self.settings.ResetAlertMinutes, lambda v: self._set("ResetAlertMinutes", v)))
-        submenu.append(self._check(text("depletion_alert_toggle"), self.settings.DepletionAlertEnabled, lambda on: self._set("DepletionAlertEnabled", on)))
-        parent.set_submenu(submenu)
-        parent.set_sensitive(self.settings.NotificationsEnabled)
-        return parent
+        self._radio_items(submenu, [
+            (text("display_lowest"), DisplayMode.LOWEST_REMAINING),
+            (text("display_both"), DisplayMode.BOTH),
+            (text("display_claude"), DisplayMode.CLAUDE_ONLY),
+            (text("display_codex"), DisplayMode.CODEX_ONLY),
+        ], self.settings.DisplayMode, lambda value: self._set("DisplayMode", value))
+        submenu.append(Gtk.SeparatorMenuItem())
+        self._radio_items(submenu, [
+            (text("label_abbreviation"), ProviderLabelStyle.ABBREVIATION),
+            (text("label_full"), ProviderLabelStyle.ICON),
+        ], self.settings.ProviderLabelStyle, lambda value: self._set("ProviderLabelStyle", value))
+        submenu.append(Gtk.SeparatorMenuItem())
+        submenu.append(self._check(text("show_countdown"), self.settings.ShowResetCountdown, lambda on: self._set("ShowResetCountdown", on)))
+        root.set_submenu(submenu)
+        return root
 
-    def _check(self, label: str, active: bool, on_change) -> Gtk.CheckMenuItem:
-        item = Gtk.CheckMenuItem(label=label)
-        item.set_active(active)
-        item.connect("toggled", lambda widget: on_change(widget.get_active()))
-        return item
-
-    def _radio_submenu(self, label: str, choices, current, on_change) -> Gtk.MenuItem:
-        parent = Gtk.MenuItem(label=label)
-        submenu = Gtk.Menu()
+    def _radio_items(self, menu: Gtk.Menu, choices, current, on_change) -> None:
         group = None
         for title, value in choices:
             item = Gtk.RadioMenuItem.new_with_label_from_widget(group, title)
             group = item
             item.set_active(value == current)
             item.connect("toggled", lambda widget, v=value: widget.get_active() and on_change(v))
-            submenu.append(item)
-        parent.set_submenu(submenu)
-        return parent
+            menu.append(item)
 
-    # --- setting changes ---------------------------------------------------------------
+    def _check(self, label: str, active: bool, on_change) -> Gtk.CheckMenuItem:
+        item = Gtk.CheckMenuItem(label=label)
+        item.set_active(active)
+        item.connect("toggled", lambda widget: on_change(widget.get_active()))
+        return item
 
     def _set(self, key: str, value, refresh: bool = False) -> None:
         if getattr(self.settings, key) == value:
