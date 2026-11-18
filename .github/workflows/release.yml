@@ -184,11 +184,13 @@ jobs:
 
       # Install what is about to ship and ask it its version, the Linux
       # counterpart of verifying the app bundle and the exe's version stamp.
+      # Depends only: the Recommends pull in the whole GNOME desktop, which
+      # stalled the v1.4.0 release on a slow mirror for 20+ minutes.
       - name: Install and verify deb
         shell: bash
         run: |
           sudo apt-get update
-          sudo apt-get install -y "./dist/tokki_${{ steps.version.outputs.deb_version }}_all.deb"
+          sudo apt-get install -y --no-install-recommends "./dist/tokki_${{ steps.version.outputs.deb_version }}_all.deb"
           reported="$(tokki --version)"
           expected="Tokki ${{ steps.version.outputs.deb_version }}"
           if [ "$reported" != "$expected" ]; then
