@@ -116,10 +116,14 @@ jobs:
 
       # Install the package through apt, so its Depends must resolve on a real
       # Ubuntu, then load the GTK app module from the installed location.
+      # Without Recommends: gnome-shell-extension-appindicator pulls in the whole
+      # GNOME desktop, hundreds of packages that stalled a slow mirror for 20+
+      # minutes. The notification binding, the other Recommends, is installed by
+      # name so the app smoke still goes through the notification path.
       - name: Install and verify deb
         run: |
           sudo apt-get update
-          sudo apt-get install -y ./dist/tokki_*_all.deb
+          sudo apt-get install -y --no-install-recommends ./dist/tokki_*_all.deb gir1.2-notify-0.7
           tokki --version
           python3 -c "import sys; sys.path.insert(0, '/usr/lib/tokki'); import tokki.app"
 
