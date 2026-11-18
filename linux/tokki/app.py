@@ -34,7 +34,7 @@ try:
 except (ValueError, ImportError):
     Notify = None
 
-from . import VERSION, autostart, diagnostics
+from . import VERSION, autostart, diagnostics, tray_image
 from .core import admin_cost, alerts, cost, display, forecast, history, issues, pause, paths, update_check
 from .core.cache import CacheStore, apply_cache_policy
 from .core.cli_refresh import ClaudeCliRefresher
@@ -95,6 +95,9 @@ class TokkiApp:
         # Autostart lives in the desktop's own folder; the file is the truth.
         self.settings.LaunchAtLogin = autostart.is_enabled()
 
+        # The logo label's current drawing (tray_image); a crash may leave older ones.
+        self.label_image: Path | None = None
+        tray_image.clear_all()
         self.indicator = AppIndicator.Indicator.new(
             "tokki", str(RESOURCES / "tokki-tray.svg"), AppIndicator.IndicatorCategory.APPLICATION_STATUS
         )
@@ -391,13 +394,31 @@ class TokkiApp:
 
     def render_label(self) -> None:
         now = _now()
-        label = display.tray_label(
+        segments = display.tray_segments(
             self.snapshot, self.settings.DisplayMode, self.settings.ProviderLabelStyle,
             self.settings.ShowResetCountdown, now, self.text("now"), self.tray_costs(),
         )
+        label = display.segments_text(segments)
+        if self.settings.ProviderLabelStyle is ProviderLabelStyle.ICON and self._render_logo_label(segments, label):
+            return
+        tray_image.clear(self.label_image)
+        self.label_image = None
         self.indicator.set_label(label, "Cdx 100% 6d23h · Cl 100% 4h59m")
         icon = "tokki-tray-warning.svg" if display.tray_shows_warning(self.snapshot, self.settings.DisplayMode) else "tokki-tray.svg"
         self.indicator.set_icon_full(str(RESOURCES / icon), "Tokki")
+
+    def _render_logo_label(self, segments, label: str) -> bool:
+        """The logo style: the whole label drawn as one image in place of the icon
+        (tray_image). A failed drawing falls back to the text label."""
+        try:
+            path = tray_image.write(segments, self.label_image)
+        except Exception as error:
+            print(f"tokki: drawing the logo label failed: {error}", file=sys.stderr)
+            return False
+        self.label_image = path
+        self.indicator.set_label("", "")
+        self.indicator.set_icon_full(str(path), label)
+        return True
 
     def tray_costs(self):
         limits = {Provider.CLAUDE: self.settings.ClaudeEnabled, Provider.CODEX: self.settings.CodexEnabled}
@@ -596,7 +617,7 @@ class TokkiApp:
         submenu.append(Gtk.SeparatorMenuItem())
         self._radio_items(submenu, [
             (text("label_abbreviation"), ProviderLabelStyle.ABBREVIATION),
-            (text("label_full"), ProviderLabelStyle.ICON),
+            (text("label_logo"), ProviderLabelStyle.ICON),
         ], self.settings.ProviderLabelStyle, lambda value: self._set("ProviderLabelStyle", value))
         submenu.append(Gtk.SeparatorMenuItem())
         submenu.append(self._check(text("show_countdown"), self.settings.ShowResetCountdown, lambda on: self._set("ShowResetCountdown", on)))

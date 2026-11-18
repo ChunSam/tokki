@@ -6,6 +6,7 @@ The number shown and the countdown beside it must come from the same window:
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 from .models import DisplayMode, ForecastWindow, Provider, ProviderLabelStyle, ProviderUsage, UsageSnapshot, UsageSource
@@ -139,6 +140,88 @@ def status_title(snapshot: UsageSnapshot | None, mode: DisplayMode, style: Provi
     return "AI --"
 
 
+@dataclass(frozen=True)
+class TraySegment:
+    """One piece of the panel label. `provider` set means the provider's logo;
+    `separator` the " · " between providers; otherwise `text`, drawn in the
+    warning colour when `warning` is set (a low 7d balance, an over-budget spend)."""
+    text: str = ""
+    warning: bool = False
+    provider: Provider | None = None
+    separator: bool = False
+
+
+def tray_segments(
+    snapshot: UsageSnapshot | None,
+    mode: DisplayMode,
+    style: ProviderLabelStyle,
+    show_countdown: bool,
+    now: datetime,
+    now_text: str,
+    costs=None,
+) -> list[TraySegment]:
+    """The panel label in pieces, mirroring StatusItemRenderer.statusSegments: the
+    logo style puts a provider's logo where the short name would be. The countdown
+    stays in the base colour even beside a red number."""
+    if snapshot is None:
+        return [TraySegment("AI --")]
+    spend = costs or {}
+
+    def suffix(usage) -> list[TraySegment]:
+        text = countdown_suffix(usage, show_countdown, now, now_text)
+        return [TraySegment(text)] if text else []
+
+    def label(provider: Provider) -> TraySegment:
+        if style is ProviderLabelStyle.ICON:
+            return TraySegment(provider=provider)
+        return TraySegment(provider_label(provider, style) + " ")
+
+    def segment(provider: Provider) -> list[TraySegment]:
+        if provider in spend:
+            entry = spend[provider]
+            return [label(provider), TraySegment(entry.text, entry.is_warning)]
+        usage = snapshot.usage(provider)
+        percent = TraySegment(format_percent(display_percent(usage)), is_seven_day_warning(usage))
+        return [label(provider), percent] + suffix(usage)
+
+    def joined(providers) -> list[TraySegment]:
+        out: list[TraySegment] = []
+        for index, provider in enumerate(providers):
+            if index:
+                out.append(TraySegment(separator=True))
+            out += segment(provider)
+        return out
+
+    if mode is DisplayMode.LOWEST_REMAINING:
+        lowest = _lowest(snapshot)
+        if lowest is not None:
+            warning = tray_shows_warning(snapshot, mode)
+            return [TraySegment("AI "), TraySegment(f"{display_percent(lowest)}%", warning)] + suffix(lowest)
+        if not spend:
+            return [TraySegment("AI --")]
+        return joined([p for p in (Provider.CLAUDE, Provider.CODEX) if p in spend])
+    if mode is DisplayMode.BOTH:
+        return joined([Provider.CODEX, Provider.CLAUDE])
+    if mode is DisplayMode.CODEX_ONLY:
+        return joined([Provider.CODEX])
+    if mode is DisplayMode.CLAUDE_ONLY:
+        return joined([Provider.CLAUDE])
+    return [TraySegment("AI --")]
+
+
+def segments_text(segments: list[TraySegment]) -> str:
+    """The segments as plain text: a logo reads as the provider's full name."""
+    parts = []
+    for piece in segments:
+        if piece.separator:
+            parts.append(" · ")
+        elif piece.provider is not None:
+            parts.append(provider_label(piece.provider, ProviderLabelStyle.ICON) + " ")
+        else:
+            parts.append(piece.text)
+    return "".join(parts)
+
+
 def tray_label(
     snapshot: UsageSnapshot | None,
     mode: DisplayMode,
@@ -151,33 +234,7 @@ def tray_label(
     """The panel label. GNOME's indicators have no tooltip, so the countdown the
     Windows tooltip carries goes after each number here, pointing at the reset of
     the window that number came from."""
-    if snapshot is None:
-        return "AI --"
-    spend = costs or {}
-
-    def suffix(usage):
-        return countdown_suffix(usage, show_countdown, now, now_text)
-
-    def segment(provider: Provider) -> str:
-        if provider in spend:
-            return provider_label(provider, style) + " " + spend[provider].text
-        usage = snapshot.usage(provider)
-        return provider_label(provider, style) + " " + format_percent(display_percent(usage)) + suffix(usage)
-
-    if mode is DisplayMode.LOWEST_REMAINING:
-        lowest = _lowest(snapshot)
-        if lowest is not None:
-            return f"AI {display_percent(lowest)}%" + suffix(lowest)
-        if not spend:
-            return "AI --"
-        return " · ".join(segment(p) for p in (Provider.CLAUDE, Provider.CODEX) if p in spend)
-    if mode is DisplayMode.BOTH:
-        return segment(Provider.CODEX) + " · " + segment(Provider.CLAUDE)
-    if mode is DisplayMode.CODEX_ONLY:
-        return segment(Provider.CODEX)
-    if mode is DisplayMode.CLAUDE_ONLY:
-        return segment(Provider.CLAUDE)
-    return "AI --"
+    return segments_text(tray_segments(snapshot, mode, style, show_countdown, now, now_text, costs))
 
 
 def tray_shows_warning(snapshot: UsageSnapshot | None, mode: DisplayMode) -> bool:

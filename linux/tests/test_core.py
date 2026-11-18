@@ -161,6 +161,26 @@ class DisplayTests(unittest.TestCase):
         self.assertEqual(label, "AI 5% 3d0h")
         self.assertTrue(display.tray_shows_warning(snap, DisplayMode.LOWEST_REMAINING))
 
+    def test_tray_segments_put_logos_where_names_would_be(self):
+        claude = usage(five=80, seven=5, reset5=NOW + timedelta(hours=2), reset7=NOW + timedelta(days=3))
+        codex = usage(Provider.CODEX, seven=50, reset7=NOW + timedelta(days=1, hours=1))
+        snap = UsageSnapshot(claude, codex, NOW)
+        Seg = display.TraySegment
+        both = display.tray_segments(snap, DisplayMode.BOTH, ProviderLabelStyle.ICON, True, NOW, "now")
+        self.assertEqual(both, [
+            Seg(provider=Provider.CODEX), Seg("50%"), Seg(" 1d1h"),
+            Seg(separator=True),
+            # The 7d number is red; its countdown beside it is not.
+            Seg(provider=Provider.CLAUDE), Seg("5%", warning=True), Seg(" 3d0h"),
+        ])
+        # Read as text, a logo is the full name: the fallback when drawing fails.
+        self.assertEqual(display.segments_text(both), "Codex 50% 1d1h · Claude 5% 3d0h")
+        short = display.tray_segments(snap, DisplayMode.CODEX_ONLY, ProviderLabelStyle.ABBREVIATION, False, NOW, "now")
+        self.assertEqual(short, [Seg("Cdx "), Seg("50%")])
+        lowest = display.tray_segments(snap, DisplayMode.LOWEST_REMAINING, ProviderLabelStyle.ICON, False, NOW, "now")
+        self.assertEqual(lowest, [Seg("AI "), Seg("5%", warning=True)])
+        self.assertEqual(display.tray_segments(None, DisplayMode.BOTH, ProviderLabelStyle.ICON, True, NOW, "now"), [Seg("AI --")])
+
     def test_window_reset_texts(self):
         text = Localizer(AppLanguage.ENGLISH).text
         self.assertEqual(display.format_window_reset(40, None, NOW, text), "starts on first use")
