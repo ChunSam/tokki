@@ -20,11 +20,12 @@ from pathlib import Path
 import gi
 
 gi.require_version("Gdk", "3.0")
+gi.require_version("Gtk", "3.0")
 gi.require_version("GdkPixbuf", "2.0")
 gi.require_version("Pango", "1.0")
 gi.require_version("PangoCairo", "1.0")
 import cairo  # noqa: E402
-from gi.repository import Gdk, GdkPixbuf, GLib, Pango, PangoCairo  # noqa: E402
+from gi.repository import Gdk, GdkPixbuf, GLib, Gtk, Pango, PangoCairo  # noqa: E402
 
 from .core.display import TraySegment  # noqa: E402
 from .core.models import Provider  # noqa: E402
@@ -44,13 +45,14 @@ def output_dir() -> Path:
 
 
 def _font() -> Pango.FontDescription:
-    name = "Sans 11"
-    try:
-        from gi.repository import Gio
-        name = Gio.Settings.new("org.gnome.desktop.interface").get_string("font-name") or name
-    except Exception:
-        pass
-    return Pango.FontDescription.from_string(name)
+    """The desktop's interface font, through GTK's own setting: on GNOME it
+    follows org.gnome.desktop.interface font-name. Reading that schema directly
+    with Gio.Settings aborts the process, uncatchably, where it is not installed."""
+    name = None
+    settings = Gtk.Settings.get_default()
+    if settings is not None:
+        name = settings.get_property("gtk-font-name")
+    return Pango.FontDescription.from_string(name or "Sans 11")
 
 
 def _logo(provider: Provider) -> GdkPixbuf.Pixbuf:
