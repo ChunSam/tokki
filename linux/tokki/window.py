@@ -368,7 +368,7 @@ class TokkiWindow(Gtk.Window):
             (text("display_claude"), DisplayMode.CLAUDE_ONLY), (text("display_codex"), DisplayMode.CODEX_ONLY),
         ], s.DisplayMode, lambda v: self.app._set("DisplayMode", v))
         combo(text("label_style"), [
-            (text("label_abbreviation"), ProviderLabelStyle.ABBREVIATION), (text("label_full"), ProviderLabelStyle.ICON),
+            (text("label_abbreviation"), ProviderLabelStyle.ABBREVIATION), (text("label_logo"), ProviderLabelStyle.ICON),
         ], s.ProviderLabelStyle, lambda v: self.app._set("ProviderLabelStyle", v))
         intervals = sorted(set(REFRESH_CHOICES) | {s.RefreshIntervalSeconds})
         combo(text("refresh_interval"), [(text("minutes", n=v // 60) if v % 60 == 0 else f"{v}s", v) for v in intervals],
