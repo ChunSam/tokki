@@ -28,6 +28,9 @@ internal sealed class TrayAppContext : ApplicationContext
     private IReadOnlyDictionary<Provider, CostState> costStates = new Dictionary<Provider, CostState>();
     private bool refreshingCosts;
 
+    /// The last settings save failed and the user has been told; cleared by a good one.
+    private bool settingsSaveFailed;
+
     /// A settings change asked for a fetch while one was running; run once more after it.
     private bool refreshCostsAgain;
 
@@ -841,7 +844,19 @@ internal sealed class TrayAppContext : ApplicationContext
     private void SaveSettings()
     {
         timer.Interval = Math.Max(60, settings.RefreshIntervalSeconds) * 1000;
-        settingsStore.Save(settings);
+        if (settingsStore.Save(settings))
+        {
+            settingsSaveFailed = false;
+            return;
+        }
+
+        // Once per run of failures: each later change tries again, and a balloon on
+        // every one of them would bury the tray.
+        if (!settingsSaveFailed)
+        {
+            settingsSaveFailed = true;
+            notifyIcon.ShowBalloonTip(5000, "Tokki", Localizer.Text(L10nKey.SettingsSaveFailed), ToolTipIcon.Warning);
+        }
     }
 
     private void OpenTaskbarIconSettings()

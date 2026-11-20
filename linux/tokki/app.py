@@ -86,6 +86,7 @@ class TokkiApp:
         # has refilled. Seeded from the cache so a reset during downtime counts.
         self.last_readings = alerts.last_readings({}, self.carried) if self.carried else {}
         self.refreshing = False
+        self.settings_save_failed = False
         self.poll_source: int | None = None
         self.wake_source: int | None = None
         self.checking_for_updates = False
@@ -132,6 +133,12 @@ class TokkiApp:
             self.settings_store.save(self.settings)
         except OSError as error:
             print(f"tokki: could not save settings: {error}", file=sys.stderr)
+            # Once per run of failures, as on Windows: each later change tries again.
+            if not self.settings_save_failed:
+                self.settings_save_failed = True
+                self._notify_all([alerts.AlertCandidate("settings-save-failed", "Tokki", self.text("settings_save_failed"))])
+            return
+        self.settings_save_failed = False
 
     # --- polling ---------------------------------------------------------------
 

@@ -109,13 +109,40 @@ public sealed class SettingsStore
         }
     }
 
-    public void Save(AppSettings settings)
+    private const int SaveAttempts = 3;
+    private static readonly TimeSpan SaveRetryDelay = TimeSpan.FromMilliseconds(100);
+
+    /// <summary>
+    /// Writes the settings and says whether that worked. Saves come from menu
+    /// clicks, the settings window and a poll's cost alerts, and a failure used to
+    /// throw straight into them: unhandled, so WinForms put up its error dialog.
+    /// The usual cause passes in a moment — antivirus, the search indexer or a
+    /// backup tool holding the file without delete sharing — so a failed write is
+    /// tried again briefly before the caller is told, and the caller keeps the
+    /// settings in memory meanwhile.
+    /// </summary>
+    public bool Save(AppSettings settings)
     {
-        Directory.CreateDirectory(System.IO.Path.GetDirectoryName(Path)!);
-        // Atomic write (temp + move) so a crash mid-save can't truncate the
-        // settings file — matches UsageHistoryStore.Save.
-        var tempPath = Path + ".tmp";
-        File.WriteAllText(tempPath, JsonSerializer.Serialize(settings, Options));
-        File.Move(tempPath, Path, overwrite: true);
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                Directory.CreateDirectory(System.IO.Path.GetDirectoryName(Path)!);
+                // Atomic write (temp + move) so a crash mid-save can't truncate the
+                // settings file — matches UsageHistoryStore.Save.
+                var tempPath = Path + ".tmp";
+                File.WriteAllText(tempPath, JsonSerializer.Serialize(settings, Options));
+                File.Move(tempPath, Path, overwrite: true);
+                return true;
+            }
+            catch (Exception ex) when ((ex is IOException or UnauthorizedAccessException) && attempt < SaveAttempts)
+            {
+                Thread.Sleep(SaveRetryDelay);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                return false;
+            }
+        }
     }
 }
