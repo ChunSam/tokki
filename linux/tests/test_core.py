@@ -748,8 +748,24 @@ class HistoryTests(unittest.TestCase):
             self.assertEqual(store.load(), [])
             store.load()
             self.assertEqual(store.file_reads, 2)  # not decoded again until it changes
+            path.write_bytes(b"[\xff]")
+            self.assertEqual(store.load(), [])  # bytes that are not UTF-8 read as empty, too
             store.append(snap, 7, NOW + timedelta(hours=3))
             self.assertEqual(len(history.HistoryStore(path).load()), 1)
+
+            # Only the modification time tells this change apart: the size stays the same.
+            same_size = Path(tmp) / "same-size.json"
+            history.HistoryStore(same_size).append(
+                UsageSnapshot(usage(five=61, seven=80), usage(Provider.CODEX, five=61, seven=80), NOW), 7, NOW)
+            reader = history.HistoryStore(same_size)
+            self.assertEqual(reader.load()[0].snapshot.claude.remaining_5h, 61)
+            original = same_size.read_text(encoding="utf-8")
+            edited = original.replace('"RemainingPercent5h": 61', '"RemainingPercent5h": 41')
+            self.assertNotEqual(edited, original)
+            self.assertEqual(len(edited), len(original))
+            same_size.write_text(edited, encoding="utf-8")
+            os.utime(same_size, ns=(1_700_000_000_000_000_000, 1_700_000_000_000_000_000))
+            self.assertEqual(reader.load()[0].snapshot.claude.remaining_5h, 41)
 
     def test_store_trend_and_csv(self):
         with tempfile.TemporaryDirectory() as tmp:

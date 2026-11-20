@@ -76,11 +76,16 @@ public sealed class SettingsStore
         Converters = { new JsonStringEnumConverter() }
     };
 
+    /// Called with the attempt number before a failed save is tried again. Lets the
+    /// smoke tests free a held file at that moment instead of racing a timer.
+    private readonly Action<int>? beforeRetry;
+
     public string Path { get; }
 
-    public SettingsStore(string? path = null)
+    public SettingsStore(string? path = null, Action<int>? beforeRetry = null)
     {
         Path = path ?? AppPaths.SettingsPath;
+        this.beforeRetry = beforeRetry;
     }
 
     public AppSettings Load()
@@ -137,6 +142,7 @@ public sealed class SettingsStore
             }
             catch (Exception ex) when ((ex is IOException or UnauthorizedAccessException) && attempt < SaveAttempts)
             {
+                beforeRetry?.Invoke(attempt);
                 Thread.Sleep(SaveRetryDelay);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)

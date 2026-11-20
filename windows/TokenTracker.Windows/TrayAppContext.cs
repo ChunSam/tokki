@@ -753,16 +753,19 @@ internal sealed class TrayAppContext : ApplicationContext
             DateTimeOffset.Now,
             TimeZoneInfo.Local,
             Localizer);
+        foreach (var alert in result.Alerts)
+        {
+            notifyIcon.ShowBalloonTip(5000, alert.Title, alert.Body, ToolTipIcon.Warning);
+        }
+
+        // Saved after the alerts, not before: a tray icon shows one balloon at a
+        // time, and a save that fails says so once. Before them, that notice was
+        // the balloon the alerts replaced.
         var delivered = result.Delivered.OrderBy(id => id, StringComparer.Ordinal).ToList();
         if (!delivered.SequenceEqual(settings.DeliveredCostAlerts))
         {
             settings.DeliveredCostAlerts = delivered;
             SaveSettings();
-        }
-
-        foreach (var alert in result.Alerts)
-        {
-            notifyIcon.ShowBalloonTip(5000, alert.Title, alert.Body, ToolTipIcon.Warning);
         }
     }
 
