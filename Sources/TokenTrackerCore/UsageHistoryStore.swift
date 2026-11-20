@@ -14,6 +14,15 @@ public final class UsageHistoryStore {
     private let url: URL
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
+    /// The entries as last read or written, with the file's stamp at that moment.
+    private var cached: (stamp: FileStamp, entries: [UsageHistoryEntry])?
+    /// How many times the file has been read and decoded, for the smoke tests.
+    package private(set) var fileReads = 0
+
+    private struct FileStamp: Equatable {
+        let modified: Date
+        let size: UInt64
+    }
 
     public init() {
         self.url = AppPaths.usageHistory
@@ -27,14 +36,39 @@ public final class UsageHistoryStore {
         decoder.dateDecodingStrategy = .iso8601
     }
 
+    /// Decoded once per change of the file. One refresh used to read it whole five
+    /// times — the append, forecast, sparklines, trend and alerts each on its own —
+    /// and the file grows with the retention setting: about 1 MB for the default
+    /// week, ~26 ms a read, so a year of history held the main thread for seconds
+    /// on every poll and every time the panel opened. The stamp (modification date
+    /// and size) still lets a change made elsewhere be seen.
     public func load() -> [UsageHistoryEntry] {
-        guard
-            let data = try? Data(contentsOf: url),
-            let entries = try? decoder.decode([UsageHistoryEntry].self, from: data)
-        else {
+        guard let stamp = currentStamp() else {
+            cached = nil
             return []
         }
-        return entries.sorted { $0.recordedAt < $1.recordedAt }
+        if let cached, cached.stamp == stamp {
+            return cached.entries
+        }
+        // A read that fails is not remembered: the file is there, so try again
+        // next time rather than treating the history as empty until it changes.
+        guard let data = try? Data(contentsOf: url) else { return [] }
+        fileReads += 1
+        let entries = ((try? decoder.decode([UsageHistoryEntry].self, from: data)) ?? [])
+            .sorted { $0.recordedAt < $1.recordedAt }
+        cached = (stamp, entries)
+        return entries
+    }
+
+    private func currentStamp() -> FileStamp? {
+        guard
+            let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
+            let modified = attributes[.modificationDate] as? Date,
+            let size = attributes[.size] as? NSNumber
+        else {
+            return nil
+        }
+        return FileStamp(modified: modified, size: size.uint64Value)
     }
 
     public func append(_ snapshot: UsageSnapshot, retentionDays: Int, now: Date = Date()) {
@@ -67,7 +101,12 @@ public final class UsageHistoryStore {
             let data = try encoder.encode(entries)
             try data.write(to: url, options: .atomic)
             try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+            // What was just written is what a read would return, so the next load
+            // need not decode it again. The file keeps dates to the second and this
+            // copy to the sub-second; nothing that reads history works finer.
+            cached = currentStamp().map { ($0, entries.sorted { $0.recordedAt < $1.recordedAt }) }
         } catch {
+            cached = nil
         }
     }
 }

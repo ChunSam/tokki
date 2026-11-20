@@ -742,6 +742,37 @@ historyStore.Append(staleSnapshot, retentionDays: 7, now);
 historyStore.Append(snapshot, retentionDays: 7, now.AddHours(1));
 var historyEntries = historyStore.Load();
 ExpectEqual(historyEntries.Count, 2, "History preserves entries outside merge window");
+
+// The history file is decoded once per change, not once per reader: a refresh and
+// every right-click used to read it whole four times. Same truth table as the
+// macOS and Linux tests.
+for (var read = 0; read < 5; read++)
+{
+    ExpectEqual(historyStore.Load().Count, 2, "Every reader sees what was written");
+}
+ExpectEqual(historyStore.FileReads, 0, "What the store wrote itself is never read back");
+var otherHistoryStore = new UsageHistoryStore(historyPath);
+ExpectEqual(otherHistoryStore.Load().Count, 2, "Another store reads the file");
+otherHistoryStore.Load();
+otherHistoryStore.CsvString();
+ExpectEqual(otherHistoryStore.FileReads, 1, "And decodes it once while it stays unchanged");
+otherHistoryStore.Append(snapshot, retentionDays: 7, now.AddHours(2));
+ExpectEqual(historyStore.Load().Count, 3, "A write by another store is picked up");
+ExpectEqual(historyStore.FileReads, 1, "By reading the file once more");
+File.Delete(historyPath);
+ExpectEqual(historyStore.Load().Count, 0, "A deleted file is an empty history, not the remembered one");
+File.WriteAllText(historyPath, "not json");
+ExpectEqual(historyStore.Load().Count, 0, "A corrupt file reads as empty");
+historyStore.Load();
+ExpectEqual(historyStore.FileReads, 2, "And is not decoded again until it changes");
+historyStore.Append(snapshot, retentionDays: 7, now.AddHours(3));
+ExpectEqual(new UsageHistoryStore(historyPath).Load().Count, 1, "Appending over a corrupt file starts a fresh history");
+// The checks below expect the two entries this section started with.
+File.Delete(historyPath);
+historyStore = new UsageHistoryStore(historyPath);
+historyStore.Append(staleSnapshot, retentionDays: 7, now);
+historyStore.Append(snapshot, retentionDays: 7, now.AddHours(1));
+historyEntries = historyStore.Load();
 var trend = UsageHistoryFormatter.TrendSummary(
     historyEntries,
     snapshot,

@@ -27,6 +27,7 @@ try runCostTests()
 try runAdminCostTests()
 try runCostDisplayTests()
 try runCostAlertTests()
+try runHistoryStoreTests()
 
 let now = Date()
 let snapshot = UsageSnapshot(

@@ -718,6 +718,39 @@ class HistoryTests(unittest.TestCase):
         current = UsageSnapshot(usage(five=63, seven=80), usage(Provider.CODEX, five=91, seven=99), NOW)
         self.assertIn("Claude 5h -27", history.trend_summary([gap, base], current, self.EN))
 
+    def test_store_decodes_once_per_change(self):
+        # Same truth table as the macOS and Windows tests.
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "h.json"
+            store = history.HistoryStore(path)
+            snap = UsageSnapshot(usage(five=63, seven=80), usage(Provider.CODEX, five=91, seven=99), NOW)
+            self.assertEqual(store.load(), [])
+            store.append(snap, 7, NOW)
+            store.append(snap, 7, NOW + timedelta(hours=1))
+            for _ in range(5):
+                self.assertEqual(len(store.load()), 2)
+            self.assertEqual(store.file_reads, 0)  # what it wrote itself is never read back
+            store.load().append("caller's own list")
+            self.assertEqual(len(store.load()), 2)  # a caller extending its copy leaves the store alone
+
+            other = history.HistoryStore(path)
+            self.assertEqual(len(other.load()), 2)
+            other.load()
+            other.csv_string()
+            self.assertEqual(other.file_reads, 1)
+            other.append(snap, 7, NOW + timedelta(hours=2))
+            self.assertEqual(len(store.load()), 3)  # a write elsewhere is seen
+            self.assertEqual(store.file_reads, 1)
+
+            path.unlink()
+            self.assertEqual(store.load(), [])
+            path.write_text("not json", encoding="utf-8")
+            self.assertEqual(store.load(), [])
+            store.load()
+            self.assertEqual(store.file_reads, 2)  # not decoded again until it changes
+            store.append(snap, 7, NOW + timedelta(hours=3))
+            self.assertEqual(len(history.HistoryStore(path).load()), 1)
+
     def test_store_trend_and_csv(self):
         with tempfile.TemporaryDirectory() as tmp:
             store = history.HistoryStore(Path(tmp) / "h.json")
