@@ -1,0 +1,37 @@
+{
+  "permissions": {
+    "allow": [
+      "Read",
+      "Grep",
+      "Glob",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git show:*)",
+      "Bash(git status:*)",
+      "Bash(git blame:*)",
+      "Bash(swift build:*)",
+      "Bash(swift run TokenTrackerSmokeTests:*)",
+      "Bash(python3 -m unittest:*)",
+      "Bash(grep:*)",
+      "Bash(sed -n:*)",
+      "Bash(ls:*)",
+      "Bash(wc:*)",
+      "Bash(jq:*)",
+      "Bash(git merge-base:*)",
+      "Bash(git rev-parse:*)"
+    ],
+    "deny": [
+      "Edit",
+      "Write",
+      "NotebookEdit",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(git checkout:*)",
+      "Bash(git switch:*)",
+      "Bash(git reset:*)",
+      "Bash(git stash:*)",
+      "Bash(git rebase:*)",
+      "Bash(gh:*)"
+    ]
+  }
+}
