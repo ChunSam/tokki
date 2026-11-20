@@ -156,3 +156,43 @@ def apply_cache_policy(
     if codex_enabled and not codex.is_available and _can_reuse(stale.codex, now, max_age):
         codex = stale.codex.with_(source=UsageSource.STALE_CACHE, error=codex.error)
     return UsageSnapshot(claude, codex, current.updated_at)
+
+
+def without_lapsed_windows(snapshot: UsageSnapshot, now: datetime) -> UsageSnapshot:
+    """The snapshot as it may be shown. A balance only describes the window
+    instance it was measured in; once that window's reset has passed it has
+    refilled, so a carried number is not a low reading but a wrong one — and the
+    fallback can last for hours, long enough to show a 5h window's last few
+    percent, in the warning colour even, well after both had reset. The alerts
+    already skip such a window (_window_has_reset); this keeps the display in
+    step. The number goes and the reset instant stays, so the menu says the window
+    has reset rather than that it was never reported. A carried reading with no
+    live window left is not shown at all. A window with no reset instant cannot be
+    judged and is kept.
+
+    Only for display: what apply_cache_policy returns is what the cache keeps,
+    numbers and all, and what the next poll carries forward, because the freed-up
+    alert seeds its "was low" reading from that file at launch. Measurements pass
+    through untouched: the provider does not report a window whose reset has
+    passed. Mirrors UsageSnapshotCachePolicy.WithoutLapsedWindows."""
+    return UsageSnapshot(
+        _without_lapsed_windows(snapshot.claude, now),
+        _without_lapsed_windows(snapshot.codex, now),
+        snapshot.updated_at,
+    )
+
+
+def _without_lapsed_windows(usage: ProviderUsage, now: datetime) -> ProviderUsage:
+    if usage.source is not UsageSource.STALE_CACHE:
+        return usage
+    live = usage.with_(
+        remaining_5h=None if _has_lapsed(usage.reset_at_5h, now) else usage.remaining_5h,
+        remaining_7d=None if _has_lapsed(usage.reset_at_7d, now) else usage.remaining_7d,
+    )
+    if live.is_available:
+        return live
+    return ProviderUsage(usage.provider, None, None, None, None, UsageSource.UNAVAILABLE, usage.error, None, now)
+
+
+def _has_lapsed(reset_at: datetime | None, now: datetime) -> bool:
+    return reset_at is not None and reset_at <= now

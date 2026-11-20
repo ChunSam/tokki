@@ -206,6 +206,78 @@ class CacheTests(unittest.TestCase):
         merged = cache.apply_cache_policy(current, stale, NOW, claude_enabled=False)
         self.assertFalse(merged.claude.is_available)
 
+    # A cached reading stands in for hours; a window whose reset passed in that time
+    # has refilled, so its old number must not be shown. Same truth table as the
+    # Swift and C# tests.
+    LAPSED_NOW = datetime(2027, 1, 15, 8, 0, tzinfo=timezone.utc)
+    MEASURED_AT = LAPSED_NOW - timedelta(hours=3)
+    LAPSED = LAPSED_NOW - timedelta(hours=2)
+    LIVE = LAPSED_NOW + timedelta(hours=24)
+
+    def reading(self, provider, five, reset5, seven, reset7):
+        return usage(provider, five, seven, reset5, reset7, updated=self.MEASURED_AT)
+
+    def carry(self, claude, codex=None):
+        """What the cache keeps."""
+        failure = UsageSnapshot(
+            ProviderUsage.unavailable(Provider.CLAUDE, "HTTP 429 from Claude API", self.LAPSED_NOW),
+            ProviderUsage.unavailable(Provider.CODEX, "HTTP 429 from Codex API", self.LAPSED_NOW),
+            self.LAPSED_NOW)
+        stale = UsageSnapshot(
+            claude, codex or ProviderUsage.unavailable(Provider.CODEX, "Disabled", self.MEASURED_AT), self.MEASURED_AT)
+        return cache.apply_cache_policy(failure, stale, self.LAPSED_NOW, codex_enabled=codex is not None)
+
+    def reuse(self, claude, codex=None):
+        """What is shown of it."""
+        return cache.without_lapsed_windows(self.carry(claude, codex), self.LAPSED_NOW)
+
+    def test_lapsed_cached_windows_are_hidden(self):
+        five_lapsed = self.reuse(self.reading(Provider.CLAUDE, 3, self.LAPSED, 60, self.LIVE)).claude
+        self.assertIs(five_lapsed.source, UsageSource.STALE_CACHE)
+        self.assertIsNone(five_lapsed.remaining_5h)
+        self.assertEqual(five_lapsed.reset_at_5h, self.LAPSED)  # the menu says it has reset
+        self.assertEqual(five_lapsed.remaining_7d, 60)
+        self.assertEqual(five_lapsed.error, "HTTP 429 from Claude API")
+        self.assertEqual(display.display_percent(five_lapsed), 60)
+
+        # Both windows reset while the token was lapsed: no stale low number at all.
+        both = self.reuse(self.reading(Provider.CLAUDE, 3, self.LAPSED, 6, self.LAPSED_NOW - timedelta(minutes=10)))
+        self.assertIs(both.claude.source, UsageSource.UNAVAILABLE)
+        self.assertEqual(both.claude.error, "HTTP 429 from Claude API")
+        self.assertFalse(display.is_seven_day_warning(both.claude))
+
+        self.assertIsNone(self.reuse(self.reading(Provider.CLAUDE, 3, self.LAPSED_NOW, 60, self.LIVE)).claude.remaining_5h)
+        unknown = self.reuse(self.reading(Provider.CLAUDE, 3, None, None, None)).claude
+        self.assertEqual(unknown.remaining_5h, 3)
+        self.assertIs(unknown.source, UsageSource.STALE_CACHE)
+        all_live = self.reading(Provider.CLAUDE, 3, self.LAPSED_NOW + timedelta(minutes=10), 6, self.LIVE)
+        carried = self.reuse(all_live).claude
+        self.assertEqual((carried.remaining_5h, carried.remaining_7d), (3, 6))
+
+        codex = self.reuse(all_live, self.reading(Provider.CODEX, None, None, 4, self.LAPSED)).codex
+        self.assertIs(codex.source, UsageSource.UNAVAILABLE)
+        self.assertEqual(codex.error, "HTTP 429 from Codex API")
+
+        measured = UsageSnapshot(self.reading(Provider.CLAUDE, 3, self.LAPSED, 60, self.LIVE),
+                                 ProviderUsage.unavailable(Provider.CODEX, "Disabled", self.MEASURED_AT), self.MEASURED_AT)
+        self.assertEqual(cache.without_lapsed_windows(measured, self.LAPSED_NOW), measured)  # measurements untouched
+
+    def test_cache_keeps_lapsed_numbers_for_the_freed_alert(self):
+        # At launch the freed-up alert seeds its "was low" reading from the cache, so
+        # a window that ran low and reset across a restart mid-outage still counts.
+        low_then_reset = self.reading(Provider.CLAUDE, 8, self.LAPSED, 80, self.LIVE)
+        kept = self.carry(low_then_reset).claude
+        self.assertIs(kept.source, UsageSource.STALE_CACHE)
+        self.assertEqual(kept.remaining_5h, 8)
+        self.assertEqual(self.carry(self.reading(Provider.CLAUDE, 3, self.LAPSED, 6, self.LAPSED)).claude.remaining_7d, 6)
+        seeded = alerts.last_readings({}, self.carry(low_then_reset))
+        again = ProviderUsage(Provider.CLAUDE, 100, 80, None, self.LIVE, UsageSource.API, None, None,
+                              self.LAPSED_NOW + timedelta(minutes=20))
+        found = alerts.freed_up_candidates(
+            seeded, UsageSnapshot(again, ProviderUsage.unavailable(Provider.CODEX, "Disabled", again.updated_at), again.updated_at),
+            alerts.AlertSettings(True, 20, 10, 0), Localizer(AppLanguage.ENGLISH).text)
+        self.assertEqual([c.id for c in found], [f"claude-5h-freed-{alerts.reset_key(self.LAPSED)}"])
+
     def test_round_trip(self):
         with tempfile.TemporaryDirectory() as tmp:
             store = cache.CacheStore(Path(tmp) / "c.json")
@@ -459,6 +531,53 @@ class AlertTests(unittest.TestCase):
         self.assertNotIn(Provider.CODEX, seeded)
         self.assertEqual(alerts.last_readings({Provider.CLAUDE: low}, self.claude_only(cached))[Provider.CLAUDE], low)
         self.assertEqual(alerts.last_readings({Provider.CLAUDE: low}, self.claude_only(refilled))[Provider.CLAUDE], refilled)
+
+
+class ResetKeyTests(unittest.TestCase):
+    """Alert ids name the window by its reset rounded to the minute. Providers
+    report one reset a fraction of a second apart from poll to poll — Claude's came
+    back as 04:59:59 and 05:00:00 in turn — and a new id each time sent the alert
+    again. Same truth table as the Swift and C# tests."""
+
+    WHOLE = datetime.fromtimestamp(1_800_000_000, tz=timezone.utc)
+    EARLY = WHOLE - timedelta(milliseconds=200)
+    LATE = WHOLE + timedelta(milliseconds=300)
+    EN = staticmethod(Localizer(AppLanguage.ENGLISH).text)
+
+    def test_rounding(self):
+        key = alerts.reset_key
+        self.assertEqual(key(self.WHOLE), 1_800_000_000)
+        self.assertEqual(key(self.WHOLE - timedelta(milliseconds=400)), 1_800_000_000)
+        self.assertEqual(key(self.WHOLE + timedelta(milliseconds=400)), 1_800_000_000)
+        self.assertEqual(key(self.WHOLE + timedelta(seconds=29)), 1_800_000_000)
+        self.assertEqual(key(self.WHOLE + timedelta(seconds=30)), 1_800_000_060)  # halves round up, as in Swift and C#
+        self.assertEqual(key(self.WHOLE - timedelta(milliseconds=1600)), 1_800_000_000)
+        self.assertNotEqual(key(self.WHOLE + timedelta(hours=5)), key(self.WHOLE))
+
+    def reset_ids(self, reset):
+        now = self.WHOLE - timedelta(minutes=5)
+        snap = UsageSnapshot(usage(five=60, seven=90, reset5=reset, updated=now),
+                             ProviderUsage.unavailable(Provider.CODEX, "Disabled", now), now)
+        return [c.id for c in alerts.candidates(snap, alerts.AlertSettings(True, 20, 10, 10), now, self.EN)]
+
+    def depletion_ids(self, reset):
+        steady = forecast.Forecast(30, 60, self.WHOLE - timedelta(minutes=4), True)
+        item = forecast.ForecastAlertInput(Provider.CLAUDE, ForecastWindow.FIVE_HOUR, steady, reset)
+        return [c.id for c in forecast.forecast_alerts([item], True, self.EN)]
+
+    def freed_ids(self, reset):
+        before = usage(five=5, seven=90, reset5=reset, updated=self.WHOLE - timedelta(minutes=10))
+        after = usage(five=100, seven=90, updated=self.WHOLE + timedelta(minutes=1))
+        current = UsageSnapshot(after, ProviderUsage.unavailable(Provider.CODEX, "Disabled", after.updated_at), after.updated_at)
+        return [c.id for c in alerts.freed_up_candidates({Provider.CLAUDE: before}, current, alerts.AlertSettings(True, 20, 10, 10), self.EN)]
+
+    def test_a_reset_flipping_across_a_second_keeps_its_ids(self):
+        self.assertEqual(self.reset_ids(self.EARLY), ["claude-5h-reset-1800000000"])
+        self.assertEqual(self.reset_ids(self.LATE), self.reset_ids(self.EARLY))
+        self.assertEqual(len(self.depletion_ids(self.EARLY)), 1)
+        self.assertEqual(self.depletion_ids(self.LATE), self.depletion_ids(self.EARLY))
+        self.assertEqual(self.freed_ids(self.EARLY), ["claude-5h-freed-1800000000"])
+        self.assertEqual(self.freed_ids(self.LATE), self.freed_ids(self.EARLY))
 
 
 class CliRefreshTests(unittest.TestCase):
