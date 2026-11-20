@@ -31,22 +31,38 @@ def history_path() -> Path:
 class HistoryStore:
     def __init__(self, path: Path | None = None):
         self.path = path or history_path()
+        # The entries as last read or written, with the file's stamp at that moment.
+        self._cached: tuple[tuple[int, int], list[HistoryEntry]] | None = None
+        # How many times the file has been read and decoded, for the tests.
+        self.file_reads = 0
+
+    def _stamp(self) -> tuple[int, int] | None:
+        try:
+            st = self.path.stat()
+        except OSError:
+            return None
+        return (st.st_mtime_ns, st.st_size)
 
     def load(self) -> list[HistoryEntry]:
-        try:
-            raw = json.loads(self.path.read_text(encoding="utf-8"))
-            entries = []
-            for item in raw:
-                recorded = parse_iso(item["RecordedAt"])
-                snap = item["Snapshot"]
-                updated = parse_iso(snap["UpdatedAt"])
-                if recorded is None or updated is None:
-                    continue
-                entries.append(HistoryEntry(recorded, UsageSnapshot(
-                    _usage_from_dict(snap["Claude"]), _usage_from_dict(snap["Codex"]), updated)))
-            return sorted(entries, key=lambda e: e.recorded_at)
-        except Exception:
+        """Decoded once per change of the file: every poll's append used to read it
+        whole again, and it grows with the retention setting. The stamp (modification
+        time and size) still lets a change made elsewhere be seen. A copy is returned,
+        since callers extend the list."""
+        stamp = self._stamp()
+        if stamp is None:
+            self._cached = None
             return []
+        if self._cached is not None and self._cached[0] == stamp:
+            return list(self._cached[1])
+        try:
+            text = self.path.read_text(encoding="utf-8")
+        except OSError:
+            # Not remembered: the file is there, so try again next time.
+            return []
+        self.file_reads += 1
+        entries = _parse_entries(text)
+        self._cached = (stamp, entries)
+        return list(entries)
 
     def append(self, snapshot: UsageSnapshot, retention_days: int, now: datetime) -> list[HistoryEntry]:
         """Returns the entries now on disk, so the caller need not read them back."""
@@ -76,10 +92,32 @@ class HistoryStore:
             } for e in entries]), encoding="utf-8")
             os.replace(temp, self.path)
         except OSError:
-            pass
+            self._cached = None
+            return
+        # What was just written is what a read would return, so the next load need
+        # not decode it again.
+        stamp = self._stamp()
+        self._cached = None if stamp is None else (stamp, sorted(entries, key=lambda e: e.recorded_at))
 
     def csv_string(self) -> str:
         return csv_string(self.load())
+
+
+def _parse_entries(text: str) -> list[HistoryEntry]:
+    try:
+        raw = json.loads(text)
+        entries = []
+        for item in raw:
+            recorded = parse_iso(item["RecordedAt"])
+            snap = item["Snapshot"]
+            updated = parse_iso(snap["UpdatedAt"])
+            if recorded is None or updated is None:
+                continue
+            entries.append(HistoryEntry(recorded, UsageSnapshot(
+                _usage_from_dict(snap["Claude"]), _usage_from_dict(snap["Codex"]), updated)))
+        return sorted(entries, key=lambda e: e.recorded_at)
+    except Exception:
+        return []
 
 
 def measurements_only(snapshot: UsageSnapshot) -> UsageSnapshot:

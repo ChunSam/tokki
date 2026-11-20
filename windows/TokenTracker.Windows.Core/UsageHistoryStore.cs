@@ -14,32 +14,69 @@ public sealed class UsageHistoryStore
         Converters = { new JsonStringEnumConverter() }
     };
 
+    /// The entries as last read or written, with the file's stamp at that moment.
+    private CachedEntries? cached;
+
     public string Path { get; }
+
+    /// How many times the file has been read and decoded, for the smoke tests.
+    public int FileReads { get; private set; }
 
     public UsageHistoryStore(string? path = null)
     {
         Path = path ?? AppPaths.UsageHistoryPath;
     }
 
+    /// <summary>
+    /// Decoded once per change of the file. A refresh used to read it whole four
+    /// times and every right-click four more — the append, the forecast per
+    /// provider, the history submenu, the trend and the alerts each on its own —
+    /// and the file grows with the retention setting, so a long history held the UI
+    /// thread before the menu could open. The stamp (last write time and size)
+    /// still lets a change made elsewhere be seen.
+    /// </summary>
     public IReadOnlyList<UsageHistoryEntry> Load()
     {
         try
         {
-            if (!File.Exists(Path))
+            var info = new FileInfo(Path);
+            if (!info.Exists)
             {
+                cached = null;
                 return Array.Empty<UsageHistoryEntry>();
             }
 
-            var entries = JsonSerializer.Deserialize<List<UsageHistoryEntry>>(File.ReadAllText(Path), Options);
-            return entries?
-                .OrderBy(entry => entry.RecordedAt)
-                .ToArray() ?? Array.Empty<UsageHistoryEntry>();
+            if (cached is { } hit && hit.Modified == info.LastWriteTimeUtc && hit.Size == info.Length)
+            {
+                return hit.Entries;
+            }
+
+            // A read that fails throws to the catch below and is not remembered: the
+            // file is there, so try again next time.
+            var text = File.ReadAllText(Path);
+            FileReads++;
+            IReadOnlyList<UsageHistoryEntry> entries;
+            try
+            {
+                entries = JsonSerializer.Deserialize<List<UsageHistoryEntry>>(text, Options)?
+                    .OrderBy(entry => entry.RecordedAt)
+                    .ToArray() ?? Array.Empty<UsageHistoryEntry>();
+            }
+            catch (JsonException)
+            {
+                entries = Array.Empty<UsageHistoryEntry>();
+            }
+
+            cached = new CachedEntries(info.LastWriteTimeUtc, info.Length, entries);
+            return entries;
         }
         catch
         {
             return Array.Empty<UsageHistoryEntry>();
         }
     }
+
+    private sealed record CachedEntries(DateTime Modified, long Size, IReadOnlyList<UsageHistoryEntry> Entries);
 
     public void Append(UsageSnapshot snapshot, int retentionDays, DateTimeOffset? now = null)
     {
@@ -75,9 +112,14 @@ public sealed class UsageHistoryStore
             var tempPath = Path + ".tmp";
             File.WriteAllText(tempPath, JsonSerializer.Serialize(entries, Options));
             File.Move(tempPath, Path, overwrite: true);
+            // What was just written is what a read would return, so the next Load
+            // need not decode it again.
+            var info = new FileInfo(Path);
+            cached = new CachedEntries(info.LastWriteTimeUtc, info.Length, entries.OrderBy(entry => entry.RecordedAt).ToArray());
         }
         catch
         {
+            cached = null;
         }
     }
 }
