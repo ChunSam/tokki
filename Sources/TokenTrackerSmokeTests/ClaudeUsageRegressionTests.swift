@@ -17,9 +17,13 @@ private func verifyLapsedCachedWindows() {
                       resetAt5h: reset5h, resetAt7d: reset7d, source: .api, error: nil, plan: nil,
                       model: nil, updatedAt: measuredAt)
     }
-    func reuse(claude: ProviderUsage, codex: ProviderUsage? = nil) -> UsageSnapshot {
+    // What the cache keeps, and what is shown of it.
+    func carry(claude: ProviderUsage, codex: ProviderUsage? = nil) -> UsageSnapshot {
         let stale = UsageSnapshot(claude: claude, codex: codex ?? .unavailable(.codex, error: "Disabled"), updatedAt: measuredAt)
         return UsageSnapshotCachePolicy.apply(current: failure(at: now), stale: stale, codexEnabled: codex != nil, updatedAt: now)
+    }
+    func reuse(claude: ProviderUsage, codex: ProviderUsage? = nil) -> UsageSnapshot {
+        UsageSnapshotCachePolicy.withoutLapsedWindows(carry(claude: claude, codex: codex), at: now)
     }
     let lapsed = now.addingTimeInterval(-2 * 3600)
     let live = now.addingTimeInterval(24 * 3600)
@@ -56,6 +60,30 @@ private func verifyLapsedCachedWindows() {
     )
     expectEqual(codexLapsed.codex.source, .unavailable, "Codex is held to the same rule")
     expectEqual(codexLapsed.codex.error, "HTTP 429 from Codex API", "With its own failure reason")
+
+    let measured = reading(.claude, fiveHour: 3, reset5h: lapsed, sevenDay: 60, reset7d: live)
+    let measuredSnapshot = UsageSnapshot(claude: measured, codex: .unavailable(.codex, error: "Disabled"), updatedAt: measuredAt)
+    expectEqual(UsageSnapshotCachePolicy.withoutLapsedWindows(measuredSnapshot, at: now), measuredSnapshot, "Only carried readings are trimmed; a measurement passes untouched")
+
+    // The cache file keeps the carried reading whole: at launch the freed-up alert
+    // seeds its "was low" reading from it, so a window that ran low and reset while
+    // the app was restarted mid-outage is still reported once measured again.
+    let lowThenReset = reading(.claude, fiveHour: 8, reset5h: lapsed, sevenDay: 80, reset7d: live)
+    let kept = carry(claude: lowThenReset).claude
+    expectEqual(kept.source, .staleCache, "The cache keeps the carried reading")
+    expectEqual(kept.remainingPercent5h, 8, "With the number of a window that has since reset")
+    let keptAll = carry(claude: reading(.claude, fiveHour: 3, reset5h: lapsed, sevenDay: 6, reset7d: lapsed)).claude
+    expectEqual(keptAll.remainingPercent7d, 6, "Even when no window of it is live any more")
+    let seeded = UsageAlertEvaluator.lastReadings([:], updatedWith: carry(claude: lowThenReset))
+    let measuredAgain = ProviderUsage(provider: .claude, remainingPercent5h: 100, remainingPercent7d: 80,
+                                      resetAt5h: nil, resetAt7d: live, source: .api, error: nil, plan: nil,
+                                      model: nil, updatedAt: now.addingTimeInterval(1200))
+    let freed = UsageAlertEvaluator.freedUpCandidates(
+        previous: seeded,
+        current: UsageSnapshot(claude: measuredAgain, codex: .unavailable(.codex, error: "Disabled"), updatedAt: measuredAgain.updatedAt),
+        settings: UsageAlertSettings(notificationsEnabled: true, fiveHourThreshold: 20, sevenDayThreshold: 10, resetWarningMinutes: 0)
+    ).map(\.id)
+    expectEqual(freed, ["claude-5h-freed-\(UsageAlertEvaluator.resetKey(lapsed))"], "A restart mid-outage still reports the window freed")
 }
 
 private func verifyClaudeResponses() throws {

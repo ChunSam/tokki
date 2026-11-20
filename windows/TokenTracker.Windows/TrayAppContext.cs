@@ -153,13 +153,16 @@ internal sealed class TrayAppContext : ApplicationContext
 
             await Task.WhenAll(claudeTask, codexTask);
             var freshSnapshot = new UsageSnapshot(claudeTask.Result, codexTask.Result, DateTimeOffset.Now);
-            snapshot = UsageSnapshotCachePolicy.Apply(
+            var carried = UsageSnapshotCachePolicy.Apply(
                 freshSnapshot,
                 cacheStore.Load(TimeSpan.FromHours(settings.StaleToleranceHours)),
                 settings.ClaudeEnabled,
                 settings.CodexEnabled,
                 maxAge: TimeSpan.FromHours(settings.StaleToleranceHours));
-            cacheStore.Save(snapshot);
+            // The cache keeps carried readings whole; only what is shown drops the
+            // number of a window that has reset since (see WithoutLapsedWindows).
+            cacheStore.Save(carried);
+            snapshot = UsageSnapshotCachePolicy.WithoutLapsedWindows(carried, carried.UpdatedAt);
             // The newest real measurement in this snapshot, by its own timestamp.
             // A status-line reading counts — it is account data — but it was taken
             // before this poll, so reporting the poll time would overstate it.
