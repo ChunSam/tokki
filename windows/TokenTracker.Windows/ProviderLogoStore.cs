@@ -16,7 +16,10 @@ internal sealed class ProviderLogoStore : IDisposable
             logos[provider] = logo;
         }
 
-        return (Image)logo.Clone();
+        // ToolStripItem does not own or dispose its Image. Reuse the store-owned
+        // bitmap across rebuilt menus instead of leaking one clone per provider
+        // on every refresh and right-click.
+        return logo;
     }
 
     public void Dispose()
