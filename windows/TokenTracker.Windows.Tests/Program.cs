@@ -816,6 +816,17 @@ ExpectEqual(loadedSettings.DisplayMode, DisplayMode.ClaudeOnly, "Display mode se
 ExpectEqual(loadedSettings.NotificationsEnabled, true, "Notification setting persists");
 ExpectEqual(loadedSettings.FiveHourAlertThreshold, 25, "Alert threshold persists");
 ExpectEqual(loadedSettings.HistoryRetentionDays, 30, "History retention persists");
+ExpectEqual(settingsStore.Save(loadedSettings), true, "A save that worked says so");
+// A save that cannot replace the file reports it instead of throwing: it used to
+// reach WinForms as an unhandled exception and its error dialog. The file is held
+// open without delete sharing, as antivirus or a backup tool would hold it.
+using (new FileStream(settingsPath, FileMode.Open, FileAccess.Read, FileShare.Read))
+{
+    ExpectEqual(settingsStore.Save(new AppSettings { HistoryRetentionDays = 90 }), false, "A save the file's holder blocks fails without throwing");
+}
+ExpectEqual(settingsStore.Load().HistoryRetentionDays, 30, "And leaves the saved settings as they were");
+ExpectEqual(settingsStore.Save(new AppSettings { HistoryRetentionDays = 90 }), true, "Once the file is free the next save goes through");
+ExpectEqual(settingsStore.Load().HistoryRetentionDays, 90, "With the new settings");
 Directory.Delete(Path.GetDirectoryName(settingsPath)!, recursive: true);
 
 ExpectEqual(RateLimitBackoff.Cooldown(TimeSpan.FromSeconds(300), 0, 0).TotalSeconds, 300.0, "First headerless 429 waits the 300s default");
