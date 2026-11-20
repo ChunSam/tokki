@@ -46,6 +46,20 @@ func runHistoryStoreTests() throws {
     expectEqual(store.load().count, 0, "A corrupt file reads as empty")
     _ = store.load()
     expectEqual(store.fileReads, 2, "And is not decoded again until it changes")
+    try Data([0x5B, 0xFF, 0x5D]).write(to: url)
+    expectEqual(store.load().count, 0, "Bytes that are not UTF-8 read as empty, too")
     store.append(snapshot(30), retentionDays: 7, now: now.addingTimeInterval(10800))
     expectEqual(UsageHistoryStore(url: url).load().count, 1, "Appending over a corrupt file starts a fresh history")
+
+    // Only the modification time tells this change apart: the size stays the same.
+    let sameSizeURL = directory.appendingPathComponent("same-size.json")
+    UsageHistoryStore(url: sameSizeURL).append(snapshot(61), retentionDays: 7, now: now)
+    let reader = UsageHistoryStore(url: sameSizeURL)
+    expectEqual(reader.load().first?.snapshot.claude.remainingPercent5h, 61, "The reader starts from the written entry")
+    let original = try String(contentsOf: sameSizeURL, encoding: .utf8)
+    let edited = original.replacingOccurrences(of: "\"remainingPercent5h\":61", with: "\"remainingPercent5h\":41")
+    expect(edited != original && edited.utf8.count == original.utf8.count, "The edit keeps the file's size")
+    try Data(edited.utf8).write(to: sameSizeURL)
+    try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: 1_700_000_000)], ofItemAtPath: sameSizeURL.path)
+    expectEqual(reader.load().first?.snapshot.claude.remainingPercent5h, 41, "A change seen only in the modification time is read")
 }

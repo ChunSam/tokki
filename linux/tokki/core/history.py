@@ -55,12 +55,14 @@ class HistoryStore:
         if self._cached is not None and self._cached[0] == stamp:
             return list(self._cached[1])
         try:
-            text = self.path.read_text(encoding="utf-8")
+            raw = self.path.read_bytes()
         except OSError:
             # Not remembered: the file is there, so try again next time.
             return []
         self.file_reads += 1
-        entries = _parse_entries(text)
+        # Bytes, not text: a file that is not UTF-8 must read as an empty history
+        # inside _parse_entries, not raise past it and stop the app at launch.
+        entries = _parse_entries(raw)
         self._cached = (stamp, entries)
         return list(entries)
 
@@ -103,9 +105,11 @@ class HistoryStore:
         return csv_string(self.load())
 
 
-def _parse_entries(text: str) -> list[HistoryEntry]:
+def _parse_entries(data: bytes) -> list[HistoryEntry]:
+    """An empty history for anything unreadable, as the macOS and Windows stores
+    treat it: broken JSON, the wrong shape, or bytes that are not UTF-8."""
     try:
-        raw = json.loads(text)
+        raw = json.loads(data.decode("utf-8"))
         entries = []
         for item in raw:
             recorded = parse_iso(item["RecordedAt"])

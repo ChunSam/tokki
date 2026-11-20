@@ -765,8 +765,24 @@ File.WriteAllText(historyPath, "not json");
 ExpectEqual(historyStore.Load().Count, 0, "A corrupt file reads as empty");
 historyStore.Load();
 ExpectEqual(historyStore.FileReads, 2, "And is not decoded again until it changes");
+File.WriteAllBytes(historyPath, new byte[] { 0x5B, 0xFF, 0x5D });
+ExpectEqual(historyStore.Load().Count, 0, "Bytes that are not UTF-8 read as empty, too");
 historyStore.Append(snapshot, retentionDays: 7, now.AddHours(3));
 ExpectEqual(new UsageHistoryStore(historyPath).Load().Count, 1, "Appending over a corrupt file starts a fresh history");
+// Only the modification time tells this change apart: the size stays the same.
+var sameSizeHistoryPath = Path.Combine(Path.GetDirectoryName(historyPath)!, "same-size.json");
+new UsageHistoryStore(sameSizeHistoryPath).Append(
+    new UsageSnapshot(Usage(Provider.Claude, 61, 80, now), Usage(Provider.Codex, 61, 80, now), now),
+    retentionDays: 7,
+    now);
+var sameSizeReader = new UsageHistoryStore(sameSizeHistoryPath);
+ExpectEqual(sameSizeReader.Load()[0].Snapshot.Claude.RemainingPercent5h, (int?)61, "The reader starts from the written entry");
+var sameSizeOriginal = File.ReadAllText(sameSizeHistoryPath);
+var sameSizeEdited = sameSizeOriginal.Replace("\"RemainingPercent5h\": 61", "\"RemainingPercent5h\": 41", StringComparison.Ordinal);
+Expect(sameSizeEdited != sameSizeOriginal && sameSizeEdited.Length == sameSizeOriginal.Length, "The edit keeps the file's size");
+File.WriteAllText(sameSizeHistoryPath, sameSizeEdited);
+File.SetLastWriteTimeUtc(sameSizeHistoryPath, new DateTime(2023, 11, 14, 22, 13, 20, DateTimeKind.Utc));
+ExpectEqual(sameSizeReader.Load()[0].Snapshot.Claude.RemainingPercent5h, (int?)41, "A change seen only in the modification time is read");
 // The checks below expect the two entries this section started with.
 File.Delete(historyPath);
 historyStore = new UsageHistoryStore(historyPath);
@@ -827,6 +843,18 @@ using (new FileStream(settingsPath, FileMode.Open, FileAccess.Read, FileShare.Re
 ExpectEqual(settingsStore.Load().HistoryRetentionDays, 30, "And leaves the saved settings as they were");
 ExpectEqual(settingsStore.Save(new AppSettings { HistoryRetentionDays = 90 }), true, "Once the file is free the next save goes through");
 ExpectEqual(settingsStore.Load().HistoryRetentionDays, 90, "With the new settings");
+// What the retry is for: a holder that lets go in a moment. The file is freed when
+// the first attempt has failed, before the second.
+var heldSettings = new FileStream(settingsPath, FileMode.Open, FileAccess.Read, FileShare.Read);
+var retriedAttempts = new List<int>();
+var retryingSettingsStore = new SettingsStore(settingsPath, beforeRetry: attempt =>
+{
+    retriedAttempts.Add(attempt);
+    heldSettings.Dispose();
+});
+ExpectEqual(retryingSettingsStore.Save(new AppSettings { HistoryRetentionDays = 45 }), true, "A save blocked for a moment goes through on a retry");
+ExpectEqual(string.Join(",", retriedAttempts), "1", "After failing once");
+ExpectEqual(settingsStore.Load().HistoryRetentionDays, 45, "With the new settings");
 Directory.Delete(Path.GetDirectoryName(settingsPath)!, recursive: true);
 
 ExpectEqual(RateLimitBackoff.Cooldown(TimeSpan.FromSeconds(300), 0, 0).TotalSeconds, 300.0, "First headerless 429 waits the 300s default");
