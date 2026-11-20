@@ -497,12 +497,15 @@ var lapsedFailure = new UsageSnapshot(
     lapsedNow);
 ProviderUsage CachedReading(Provider provider, int? fiveHour, DateTimeOffset? reset5h, int? sevenDay, DateTimeOffset? reset7d) =>
     new(provider, fiveHour, sevenDay, reset5h, reset7d, UsageSource.Api, null, null, null, lapsedMeasuredAt);
-UsageSnapshot ReuseCached(ProviderUsage claude, ProviderUsage? codex = null) =>
+// What the cache keeps, and what is shown of it.
+UsageSnapshot CarryCached(ProviderUsage claude, ProviderUsage? codex = null) =>
     UsageSnapshotCachePolicy.Apply(
         lapsedFailure,
         new UsageSnapshot(claude, codex ?? ProviderUsage.Unavailable(Provider.Codex, "Disabled"), lapsedMeasuredAt),
         codexEnabled: codex is not null,
         updatedAt: lapsedNow);
+UsageSnapshot ReuseCached(ProviderUsage claude, ProviderUsage? codex = null) =>
+    UsageSnapshotCachePolicy.WithoutLapsedWindows(CarryCached(claude, codex), lapsedNow);
 var lapsedReset = lapsedNow.AddHours(-2);
 var liveReset = lapsedNow.AddHours(24);
 
@@ -535,6 +538,34 @@ ExpectEqual(carriedLive.RemainingPercent7d, (int?)6, "Both windows of it");
 var codexLapsed = ReuseCached(allLive, CachedReading(Provider.Codex, null, null, 4, lapsedReset));
 ExpectEqual(codexLapsed.Codex.Source, UsageSource.Unavailable, "Codex is held to the same rule");
 ExpectEqual(codexLapsed.Codex.Error, "HTTP 429 from Codex API", "With its own failure reason");
+
+var measuredLapsedSnapshot = new UsageSnapshot(
+    CachedReading(Provider.Claude, 3, lapsedReset, 60, liveReset),
+    ProviderUsage.Unavailable(Provider.Codex, "Disabled"),
+    lapsedMeasuredAt);
+var untouchedMeasurement = UsageSnapshotCachePolicy.WithoutLapsedWindows(measuredLapsedSnapshot, lapsedNow);
+ExpectEqual(untouchedMeasurement.Claude, measuredLapsedSnapshot.Claude, "Only carried readings are trimmed; a measurement passes untouched");
+
+// The cache file keeps the carried reading whole: at launch the freed-up alert
+// seeds its "was low" reading from it, so a window that ran low and reset while
+// the app was restarted mid-outage is still reported once measured again.
+var lowThenReset = CachedReading(Provider.Claude, 8, lapsedReset, 80, liveReset);
+var keptLowWindow = CarryCached(lowThenReset).Claude;
+ExpectEqual(keptLowWindow.Source, UsageSource.StaleCache, "The cache keeps the carried reading");
+ExpectEqual(keptLowWindow.RemainingPercent5h, (int?)8, "With the number of a window that has since reset");
+var keptNoLiveWindow = CarryCached(CachedReading(Provider.Claude, 3, lapsedReset, 6, lapsedReset)).Claude;
+ExpectEqual(keptNoLiveWindow.RemainingPercent7d, (int?)6, "Even when no window of it is live any more");
+var lapsedSeed = UsageAlertEvaluator.LastReadings(new Dictionary<Provider, ProviderUsage>(), CarryCached(lowThenReset));
+var measuredAfterRestart = new ProviderUsage(
+    Provider.Claude, 100, 80, null, liveReset, UsageSource.Api, null, null, null, lapsedNow.AddMinutes(20));
+var freedAfterRestart = UsageAlertEvaluator.FreedUpCandidates(
+    lapsedSeed,
+    new UsageSnapshot(measuredAfterRestart, ProviderUsage.Unavailable(Provider.Codex, "Disabled"), measuredAfterRestart.UpdatedAt),
+    new UsageAlertSettings(true, 20, 10, 0));
+ExpectEqual(
+    string.Join(",", freedAfterRestart.Select(candidate => candidate.Id)),
+    "claude-5h-freed-" + UsageAlertEvaluator.ResetKey(lapsedReset),
+    "A restart mid-outage still reports the window freed");
 var cachedIssue = UsageIssueFormatter.Issue(staleApplied.Claude);
 ExpectEqual(cachedIssue.Kind, UsageIssueKind.UsingCachedData, "Stale cache issue is classified");
 ExpectEqual(cachedIssue.TechnicalDetail, "HTTP 429 from Claude API", "Stale cache keeps technical detail");

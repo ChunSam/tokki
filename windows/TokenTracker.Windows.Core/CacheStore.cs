@@ -85,47 +85,65 @@ public static class UsageSnapshotCachePolicy
         var claude = current.Claude;
         var codex = current.Codex;
 
-        if (claudeEnabled && !claude.IsAvailable && Reusable(stale.Claude, now, tolerance) is { } reusableClaude)
+        if (claudeEnabled && !claude.IsAvailable && CanReuse(stale.Claude, now, tolerance))
         {
-            claude = MarkStale(reusableClaude, claude.Error);
+            claude = MarkStale(stale.Claude, claude.Error);
         }
 
-        if (codexEnabled && !codex.IsAvailable && Reusable(stale.Codex, now, tolerance) is { } reusableCodex)
+        if (codexEnabled && !codex.IsAvailable && CanReuse(stale.Codex, now, tolerance))
         {
-            codex = MarkStale(reusableCodex, codex.Error);
+            codex = MarkStale(stale.Codex, codex.Error);
         }
 
         return new UsageSnapshot(claude, codex, current.UpdatedAt);
     }
 
-    /// What of a last good reading may still stand in, or null when nothing may.
-    private static ProviderUsage? Reusable(ProviderUsage usage, DateTimeOffset now, TimeSpan maxAge)
+    private static bool CanReuse(ProviderUsage usage, DateTimeOffset now, TimeSpan maxAge)
     {
         var age = now - usage.UpdatedAt;
-        if (usage.Source == UsageSource.Unavailable || age < TimeSpan.Zero || age > maxAge)
-        {
-            return null;
-        }
-
-        var live = WithoutLapsedWindows(usage, now);
-        return live.IsAvailable ? live : null;
+        return usage.IsAvailable && usage.Source != UsageSource.Unavailable
+            && age >= TimeSpan.Zero && age <= maxAge;
     }
 
-    /// A balance only describes the window instance it was measured in. Once that
-    /// window's reset has passed it has refilled, so the cached number is not a low
-    /// reading but a wrong one — and the fallback can last for hours, long enough
-    /// to show a 5h window's last few percent, in the 7d warning colour even, well
-    /// after both had reset. The alerts already skip such a window
-    /// (WindowHasReset); this keeps the display in step. The number goes and the
-    /// reset instant stays, so the menu says the window has reset rather than that
-    /// it was never reported. A window with no reset instant cannot be judged and
-    /// is kept.
-    private static ProviderUsage WithoutLapsedWindows(ProviderUsage usage, DateTimeOffset now) =>
-        usage with
+    /// The snapshot as it may be shown. A balance only describes the window
+    /// instance it was measured in; once that window's reset has passed it has
+    /// refilled, so a carried number is not a low reading but a wrong one — and the
+    /// fallback can last for hours, long enough to show a 5h window's last few
+    /// percent, in the 7d warning colour even, well after both had reset. The
+    /// alerts already skip such a window (WindowHasReset); this keeps the display
+    /// in step. The number goes and the reset instant stays, so the menu says the
+    /// window has reset rather than that it was never reported. A carried reading
+    /// with no live window left is not shown at all. A window with no reset instant
+    /// cannot be judged and is kept.
+    ///
+    /// Only for display: what Apply returns is what the cache keeps, numbers and
+    /// all, because the freed-up alert seeds its "was low" reading from that file at
+    /// launch. Hiding the number there too lost the alert for a window that ran low
+    /// and reset while the app was restarted mid-outage. Measurements pass through
+    /// untouched: the provider does not report a window whose reset has passed.
+    public static UsageSnapshot WithoutLapsedWindows(UsageSnapshot snapshot, DateTimeOffset now) =>
+        snapshot with
+        {
+            Claude = WithoutLapsedWindows(snapshot.Claude, now),
+            Codex = WithoutLapsedWindows(snapshot.Codex, now)
+        };
+
+    private static ProviderUsage WithoutLapsedWindows(ProviderUsage usage, DateTimeOffset now)
+    {
+        if (usage.Source != UsageSource.StaleCache)
+        {
+            return usage;
+        }
+
+        var live = usage with
         {
             RemainingPercent5h = HasLapsed(usage.ResetAt5h, now) ? null : usage.RemainingPercent5h,
             RemainingPercent7d = HasLapsed(usage.ResetAt7d, now) ? null : usage.RemainingPercent7d
         };
+        return live.IsAvailable
+            ? live
+            : new ProviderUsage(usage.Provider, null, null, null, null, UsageSource.Unavailable, usage.Error, null, null, now);
+    }
 
     private static bool HasLapsed(DateTimeOffset? resetAt, DateTimeOffset now) =>
         resetAt is not null && resetAt.Value <= now;
