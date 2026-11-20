@@ -36,7 +36,7 @@ except (ValueError, ImportError):
 
 from . import VERSION, autostart, diagnostics, tray_image
 from .core import admin_cost, alerts, cost, display, forecast, history, issues, pause, paths, update_check
-from .core.cache import CacheStore, apply_cache_policy, without_lapsed_windows
+from .core.cache import CacheStore, apply_cache_policy, as_cached, without_lapsed_windows
 from .core.cli_refresh import ClaudeCliRefresher
 from .core.client import UsageClient
 from .core.models import AppLanguage, DisplayMode, ForecastWindow, Provider, ProviderLabelStyle, ProviderUsage, UsageSnapshot, UsageSource
@@ -76,9 +76,11 @@ class TokkiApp:
         self.client = UsageClient(cli_refresher=ClaudeCliRefresher())
         # What the last poll carried forward, numbers and all: what the cache file
         # holds and what the next poll falls back on. The menu shows `snapshot`,
-        # the same with the number of any window that has reset since hidden.
+        # the same with the number of any window that has reset since hidden —
+        # and at launch, before any poll, every reading in it labelled cached.
         self.carried: UsageSnapshot | None = self.cache_store.load(self._stale_tolerance(), _now())
-        self.snapshot: UsageSnapshot | None = without_lapsed_windows(self.carried, _now()) if self.carried else None
+        self.snapshot: UsageSnapshot | None = (
+            without_lapsed_windows(as_cached(self.carried), _now()) if self.carried else None)
         self.delivered_alerts: set[str] = set()
         # Each provider's last reading with numbers, for telling when a low window
         # has refilled. Seeded from the cache so a reset during downtime counts.

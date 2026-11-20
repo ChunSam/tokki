@@ -158,6 +158,22 @@ def apply_cache_policy(
     return UsageSnapshot(claude, codex, current.updated_at)
 
 
+def as_cached(snapshot: UsageSnapshot) -> UsageSnapshot:
+    """The cache file read back at launch, as the tray shows it until the first
+    poll lands — or for as long as a saved pause holds, which can be indefinitely.
+    Whatever the poll that saved it measured, every reading in it is a carried one
+    by now, so it is labelled cached: no countdown, and without_lapsed_windows hides
+    any window that has reset since. Only for display; the file's own contents
+    still seed the fallback and the freed-up alert. The macOS and Windows apps show
+    nothing until their first poll, so this has no counterpart there."""
+    def mark(usage: ProviderUsage) -> ProviderUsage:
+        if usage.is_available and usage.source is not UsageSource.UNAVAILABLE:
+            return usage.with_(source=UsageSource.STALE_CACHE)
+        return usage
+
+    return UsageSnapshot(mark(snapshot.claude), mark(snapshot.codex), snapshot.updated_at)
+
+
 def without_lapsed_windows(snapshot: UsageSnapshot, now: datetime) -> UsageSnapshot:
     """The snapshot as it may be shown. A balance only describes the window
     instance it was measured in; once that window's reset has passed it has

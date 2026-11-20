@@ -262,6 +262,24 @@ class CacheTests(unittest.TestCase):
                                  ProviderUsage.unavailable(Provider.CODEX, "Disabled", self.MEASURED_AT), self.MEASURED_AT)
         self.assertEqual(cache.without_lapsed_windows(measured, self.LAPSED_NOW), measured)  # measurements untouched
 
+    def test_launch_shows_the_cache_file_as_cached(self):
+        # Until the first poll lands, or for as long as a saved pause holds, the tray
+        # shows the cache file. A reading it saved as a measurement is a carried one
+        # by then: labelled cached, and its lapsed windows hidden like any other.
+        saved = UsageSnapshot(
+            self.reading(Provider.CLAUDE, 3, self.LAPSED, 6, self.LAPSED_NOW - timedelta(minutes=10)),
+            self.reading(Provider.CODEX, None, None, 40, self.LIVE),
+            self.MEASURED_AT)
+        shown = cache.without_lapsed_windows(cache.as_cached(saved), self.LAPSED_NOW)
+        self.assertIs(shown.claude.source, UsageSource.UNAVAILABLE)
+        self.assertFalse(display.is_seven_day_warning(shown.claude))
+        self.assertEqual(display.status_title(shown, DisplayMode.CLAUDE_ONLY), "Cl --")
+        self.assertIs(shown.codex.source, UsageSource.STALE_CACHE)
+        self.assertEqual(shown.codex.remaining_7d, 40)
+        self.assertEqual(cache.as_cached(saved).claude.remaining_5h, 3)  # marking alone keeps the numbers
+        off = UsageSnapshot(ProviderUsage.unavailable(Provider.CLAUDE, "Disabled", self.MEASURED_AT), saved.codex, self.MEASURED_AT)
+        self.assertIs(cache.as_cached(off).claude.source, UsageSource.UNAVAILABLE)
+
     def test_cache_keeps_lapsed_numbers_for_the_freed_alert(self):
         # At launch the freed-up alert seeds its "was low" reading from the cache, so
         # a window that ran low and reset across a restart mid-outage still counts.
