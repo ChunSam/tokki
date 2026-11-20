@@ -47,6 +47,28 @@ $c = Get-Content "$env:APPDATA\Token Tracker\usage-cache.json" -Raw | ConvertFro
 Get-WinEvent -FilterHashtable @{LogName='Application'; Level=1,2; StartTime=$start} -ErrorAction SilentlyContinue | ForEach-Object { "  EVENT $($_.ProviderName): $($_.Message.Substring(0, [Math]::Min(200, $_.Message.Length)))" }
 ```
 
+## 설치본 교체
+
+위 검사가 통과하면 VM의 설치본(`C:\Users\vw\TokenTracker`)을 같은 판으로 바꾼다. 확인 폴더에서만
+실행하고 끝내면 설치본이 옛 판으로 남는다. 1.1.17이 1.4.2 릴리스 뒤까지 남아 있다가 `status` 점검에서야
+드러났다(2026-11-20). 같은 경로에 넣으면 트레이 아이콘의 `IsPromoted` 설정도 그대로 이어진다.
+
+```powershell
+$ErrorActionPreference = 'Stop'
+$ver = '1.2.1'
+$dest = "$env:USERPROFILE\TokenTracker"; $old = "$dest-previous"
+if (Test-Path $old) { throw "$old exists" }
+Get-Process -Name TokenTracker.Windows -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.Id -Force; $_.WaitForExit(10000) | Out-Null }
+Rename-Item $dest $old
+Copy-Item -Recurse "$env:USERPROFILE\release-$ver-verify\win-arm64" $dest
+Start-Process -FilePath "$dest\TokenTracker.Windows.exe" -WorkingDirectory $dest
+Start-Sleep 10
+"version=$((Get-Item "$dest\TokenTracker.Windows.exe").VersionInfo.ProductVersion) running=$([bool](Get-Process -Name TokenTracker.Windows -ErrorAction SilentlyContinue))"
+```
+
+`usage-cache.json`의 `updated`가 실행 뒤로 바뀐 것을 확인한 다음 `$old`를 지운다. 컴퓨터를 켤 때 자동 실행은
+VM에서 꺼 두었으므로 Run 키는 건드리지 않는다.
+
 ## 통과 기준
 
 - 두 zip 모두 `checksum ok=True`. 체크섬 파일은 파일명만 담고 LF로 끝나야 한다(CR이 없어야 한다).
