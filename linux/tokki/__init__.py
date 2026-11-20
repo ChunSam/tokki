@@ -3,4 +3,4 @@
 # Local default, kept in step with scripts/build_app.sh's APP_VERSION and the
 # Windows csproj <Version>; CI fails when they drift. Release builds stamp the
 # tag's version into the .deb instead.
-VERSION = "1.4.1"
+VERSION = "1.4.2"
