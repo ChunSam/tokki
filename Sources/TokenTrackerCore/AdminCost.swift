@@ -377,7 +377,7 @@ public actor AdminCostService {
     #if canImport(Security)
     public init() {
         self.init(
-            keyStore: KeychainAdminKeyStore(),
+            keyStore: KeychainAdminKeyStore(allowAuthenticationUI: false),
             clients: [.claude: AdminCostClient(provider: .claude), .codex: AdminCostClient(provider: .codex)],
             cacheStore: CostCacheStore()
         )

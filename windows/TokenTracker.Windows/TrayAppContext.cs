@@ -56,7 +56,7 @@ internal sealed class TrayAppContext : ApplicationContext
 
         notifyIcon.Visible = true;
         notifyIcon.Text = "Tokki";
-        notifyIcon.ContextMenuStrip = BuildMenu();
+        ReplaceMenu();
         // Built when a poll lands but opened any time up to a whole refresh interval
         // later, the menu read "updated 0s ago" and its reset countdowns as of the
         // poll. The right-button press arrives just before the release that opens
@@ -66,7 +66,7 @@ internal sealed class TrayAppContext : ApplicationContext
         {
             if (e.Button == MouseButtons.Right)
             {
-                notifyIcon.ContextMenuStrip = BuildMenu();
+                ReplaceMenu();
             }
         };
         SetIcon(null);
@@ -120,6 +120,7 @@ internal sealed class TrayAppContext : ApplicationContext
             countdownTimer.Dispose();
             wakeTimer.Dispose();
             notifyIcon.Visible = false;
+            notifyIcon.ContextMenuStrip?.Dispose();
             notifyIcon.Dispose();
             providerLogos.Dispose();
             currentIcon?.Dispose();
@@ -138,7 +139,7 @@ internal sealed class TrayAppContext : ApplicationContext
         if (PauseController.IsPaused(settings.PollPausedUntil))
         {
             // Skip the network fetch while paused; keep the menu's countdown fresh.
-            notifyIcon.ContextMenuStrip = BuildMenu();
+            ReplaceMenu();
             return;
         }
 
@@ -191,7 +192,7 @@ internal sealed class TrayAppContext : ApplicationContext
         finally
         {
             refreshing = false;
-            notifyIcon.ContextMenuStrip = BuildMenu();
+            ReplaceMenu();
         }
 
         await CheckForUpdatesIfDueAsync();
@@ -231,7 +232,7 @@ internal sealed class TrayAppContext : ApplicationContext
             NotifyCostAlerts();
             SetIcon(snapshot);
             UpdateTooltip();
-            notifyIcon.ContextMenuStrip = BuildMenu();
+            ReplaceMenu();
         }
         finally
         {
@@ -275,7 +276,7 @@ internal sealed class TrayAppContext : ApplicationContext
             }
 
             availableUpdateVersion = UpdateCheck.IsNewer(latest, current) ? latest : null;
-            notifyIcon.ContextMenuStrip = BuildMenu();
+            ReplaceMenu();
         }
         finally
         {
@@ -381,6 +382,29 @@ internal sealed class TrayAppContext : ApplicationContext
         menu.Items.Add(Localizer.Text(L10nKey.Quit), null, (_, _) => ExitThread());
 
         return menu;
+    }
+
+    /// Replaces the menu without leaving every previous ToolStrip and its native
+    /// window handles alive for the rest of the process. A menu can request a
+    /// rebuild from one of its own click handlers, so defer disposal until it has
+    /// closed in that case.
+    private void ReplaceMenu()
+    {
+        var previous = notifyIcon.ContextMenuStrip;
+        notifyIcon.ContextMenuStrip = BuildMenu();
+        if (previous is null)
+        {
+            return;
+        }
+
+        if (previous.Visible)
+        {
+            previous.Closed += (_, _) => previous.Dispose();
+        }
+        else
+        {
+            previous.Dispose();
+        }
     }
 
     private void AddProvider(
@@ -589,7 +613,7 @@ internal sealed class TrayAppContext : ApplicationContext
             ? DateTimeOffset.MaxValue
             : DateTimeOffset.Now + duration.Value;
         SaveSettings();
-        notifyIcon.ContextMenuStrip = BuildMenu();
+        ReplaceMenu();
     }
 
     private ToolStripMenuItem DiagnosticsMenu()
@@ -649,7 +673,7 @@ internal sealed class TrayAppContext : ApplicationContext
                 async () =>
                 {
                     SaveSettings();
-                    notifyIcon.ContextMenuStrip = BuildMenu();
+                    ReplaceMenu();
                     await RefreshAsync();
                 },
                 () =>
@@ -659,19 +683,19 @@ internal sealed class TrayAppContext : ApplicationContext
                     UpdateTooltip();
                     SyncCountdownTimer();
                     _ = CheckForUpdatesIfDueAsync();
-                    notifyIcon.ContextMenuStrip = BuildMenu();
+                    ReplaceMenu();
                 },
                 () =>
                 {
                     SaveSettings();
-                    notifyIcon.ContextMenuStrip = BuildMenu();
+                    ReplaceMenu();
                 },
                 async () =>
                 {
                     SaveSettings();
                     SetIcon(snapshot);
                     UpdateTooltip();
-                    notifyIcon.ContextMenuStrip = BuildMenu();
+                    ReplaceMenu();
                     await RefreshCostsIfDueAsync();
                 });
             settingsForm.FormClosed += (_, _) => settingsForm = null;

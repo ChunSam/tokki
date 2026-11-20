@@ -332,7 +332,8 @@ osascript -e 'tell application "System Events" to exists process "TokenTrackerMe
   CLI가 없거나 리프레시 토큰까지 만료되면 마지막 값만 남는다.
 - 자동 갱신은 "시작하자마자 갱신하고 신뢰 화면에서 멈춘다"는 CLI 2.1.314의 동작에 기대고 있다.
   순서가 바뀌면 시도는 `unchanged`로 끝나고 진단 정보의 `Claude CLI last renewal`에 남는다.
-- 첫 Claude Keychain 접근 시 macOS 권한 허용 창이 뜰 수 있다.
+- Claude Code 자격 증명은 첫 Keychain 접근 때 macOS 권한 창이 뜰 수 있다. Admin 키는 업데이트 뒤
+  승인이 다시 필요해도 백그라운드에서 창을 띄우지 않고, 설정의 `Admin 키…`에서만 요청한다.
 - 산출물은 unsigned `.app`이다. 다른 Mac에서 더블클릭으로 열려면 Developer ID 서명과 notarization이
   필요하다.
 - 이 개발 머신에는 dotnet이 없다. 대신 UTM의 Windows 11 Arm VM에서 C# 테스트·publish·앱 실행을
