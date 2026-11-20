@@ -204,7 +204,7 @@ public static class UsageForecastAlert
             }
 
             var windowLabel = input.Window.ShortLabel();
-            var resetId = input.ResetAt.Value.ToUnixTimeSeconds();
+            var resetId = UsageAlertEvaluator.ResetKey(input.ResetAt.Value);
             var name = input.Provider == Provider.Claude ? "Claude" : "Codex";
             result.Add(new UsageAlertCandidate(
                 $"{input.Provider.ToId()}-{windowLabel}-empty-before-reset-{resetId}",

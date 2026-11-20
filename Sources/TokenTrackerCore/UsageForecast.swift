@@ -170,7 +170,7 @@ public enum UsageForecastAlert {
                 return nil
             }
             let windowLabel = input.window.shortLabel
-            let resetID = Int(resetAt.timeIntervalSince1970)
+            let resetID = UsageAlertEvaluator.resetKey(resetAt)
             return UsageAlertCandidate(
                 id: "\(input.provider.rawValue)-\(windowLabel)-empty-before-reset-\(resetID)",
                 title: localizer.text(.depletionAlertTitle),

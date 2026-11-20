@@ -486,6 +486,55 @@ ExpectEqual(shortTolerance.Claude.Source, UsageSource.Unavailable, "Custom toler
 ExpectEqual(shortTolerance.Codex.Source, UsageSource.StaleCache, "Custom tolerance keeps recent Codex data");
 var longTolerance = UsageSnapshotCachePolicy.Apply(bothFailed, staggered, updatedAt: now, maxAge: TimeSpan.FromHours(48));
 ExpectEqual(longTolerance.Claude.Source, UsageSource.StaleCache, "Longer configured tolerance is honored");
+
+// A cached reading stands in for hours; a window whose reset passed in that time
+// has refilled, so its old number must not be shown. Mirrors the macOS tests.
+var lapsedNow = new DateTimeOffset(2027, 1, 15, 8, 0, 0, TimeSpan.Zero);
+var lapsedMeasuredAt = lapsedNow.AddHours(-3);
+var lapsedFailure = new UsageSnapshot(
+    ProviderUsage.Unavailable(Provider.Claude, "HTTP 429 from Claude API"),
+    ProviderUsage.Unavailable(Provider.Codex, "HTTP 429 from Codex API"),
+    lapsedNow);
+ProviderUsage CachedReading(Provider provider, int? fiveHour, DateTimeOffset? reset5h, int? sevenDay, DateTimeOffset? reset7d) =>
+    new(provider, fiveHour, sevenDay, reset5h, reset7d, UsageSource.Api, null, null, null, lapsedMeasuredAt);
+UsageSnapshot ReuseCached(ProviderUsage claude, ProviderUsage? codex = null) =>
+    UsageSnapshotCachePolicy.Apply(
+        lapsedFailure,
+        new UsageSnapshot(claude, codex ?? ProviderUsage.Unavailable(Provider.Codex, "Disabled"), lapsedMeasuredAt),
+        codexEnabled: codex is not null,
+        updatedAt: lapsedNow);
+var lapsedReset = lapsedNow.AddHours(-2);
+var liveReset = lapsedNow.AddHours(24);
+
+var fiveHourLapsed = ReuseCached(CachedReading(Provider.Claude, 3, lapsedReset, 60, liveReset)).Claude;
+ExpectEqual(fiveHourLapsed.Source, UsageSource.StaleCache, "A reading with one live window is still carried");
+Expect(fiveHourLapsed.RemainingPercent5h is null, "A window whose reset passed loses its cached number");
+ExpectEqual(fiveHourLapsed.ResetAt5h, (DateTimeOffset?)lapsedReset, "Its reset instant stays, so the menu says it has reset");
+ExpectEqual(fiveHourLapsed.RemainingPercent7d, (int?)60, "A window still running keeps its cached number");
+ExpectEqual(fiveHourLapsed.Error, "HTTP 429 from Claude API", "The carried reading keeps the current failure");
+ExpectEqual(DisplayFormatter.DisplayPercent(fiveHourLapsed), (int?)60, "The tray falls back to the live window");
+
+// The case the review reproduced: both windows reset while the token was lapsed,
+// and the menu bar still read "AI 6%" in the 7d warning colour.
+var bothLapsed = ReuseCached(CachedReading(Provider.Claude, 3, lapsedReset, 6, lapsedNow.AddMinutes(-10)));
+ExpectEqual(bothLapsed.Claude.Source, UsageSource.Unavailable, "A reading with no live window is not carried at all");
+ExpectEqual(bothLapsed.Claude.Error, "HTTP 429 from Claude API", "It reports the current failure instead");
+ExpectEqual(DisplayFormatter.StatusTitle(bothLapsed, DisplayMode.LowestRemaining), "AI --", "No stale low number reaches the tray");
+Expect(!DisplayFormatter.IsSevenDayWarning(bothLapsed.Claude), "Nor its warning colour");
+
+var resetsNow = ReuseCached(CachedReading(Provider.Claude, 3, lapsedNow, 60, liveReset)).Claude;
+Expect(resetsNow.RemainingPercent5h is null, "A reset at this very instant has passed, as the alerts judge it");
+var unknownReset = ReuseCached(CachedReading(Provider.Claude, 3, null, null, null)).Claude;
+ExpectEqual(unknownReset.RemainingPercent5h, (int?)3, "A window with no reset instant cannot be judged and is kept");
+ExpectEqual(unknownReset.Source, UsageSource.StaleCache, "So the reading is still carried");
+var allLive = CachedReading(Provider.Claude, 3, lapsedNow.AddMinutes(10), 6, liveReset);
+var carriedLive = ReuseCached(allLive).Claude;
+ExpectEqual(carriedLive.RemainingPercent5h, (int?)3, "A low window that has not reset keeps its number");
+ExpectEqual(carriedLive.RemainingPercent7d, (int?)6, "Both windows of it");
+
+var codexLapsed = ReuseCached(allLive, CachedReading(Provider.Codex, null, null, 4, lapsedReset));
+ExpectEqual(codexLapsed.Codex.Source, UsageSource.Unavailable, "Codex is held to the same rule");
+ExpectEqual(codexLapsed.Codex.Error, "HTTP 429 from Codex API", "With its own failure reason");
 var cachedIssue = UsageIssueFormatter.Issue(staleApplied.Claude);
 ExpectEqual(cachedIssue.Kind, UsageIssueKind.UsingCachedData, "Stale cache issue is classified");
 ExpectEqual(cachedIssue.TechnicalDetail, "HTTP 429 from Claude API", "Stale cache keeps technical detail");
@@ -772,8 +821,50 @@ Expect(UsageForecastText.MenuLine(null, ForecastWindow.SevenDay, forecastLocaliz
 var forecastAlertInput = new ForecastAlertInput(Provider.Claude, ForecastWindow.FiveHour, steadyForecast, now.AddHours(3));
 ExpectEqual(
     string.Join(",", UsageForecastAlert.Candidates(new[] { forecastAlertInput }, enabled: true).Select(candidate => candidate.Id)),
-    $"claude-5h-empty-before-reset-{now.AddHours(3).ToUnixTimeSeconds()}",
+    $"claude-5h-empty-before-reset-{UsageAlertEvaluator.ResetKey(now.AddHours(3))}",
     "Forecast alert fires when depletion precedes reset");
+
+// Alert ids name the window by its reset rounded to the minute. Providers report
+// one reset a fraction of a second apart from poll to poll — Claude's came back as
+// 04:59:59 and 05:00:00 in turn — and a new id each time sent the alert again.
+var wholeMinute = DateTimeOffset.FromUnixTimeSeconds(1_800_000_000);
+ExpectEqual(UsageAlertEvaluator.ResetKey(wholeMinute), 1_800_000_000L, "a whole-minute reset keys to itself");
+ExpectEqual(UsageAlertEvaluator.ResetKey(wholeMinute.AddMilliseconds(-400)), 1_800_000_000L, "a reset reported just early keys to the same minute");
+ExpectEqual(UsageAlertEvaluator.ResetKey(wholeMinute.AddMilliseconds(400)), 1_800_000_000L, "a reset reported just late keys to the same minute");
+ExpectEqual(UsageAlertEvaluator.ResetKey(wholeMinute.AddSeconds(29)), 1_800_000_000L, "under half a minute rounds down");
+ExpectEqual(UsageAlertEvaluator.ResetKey(wholeMinute.AddSeconds(30)), 1_800_000_060L, "half a minute rounds up");
+ExpectEqual(UsageAlertEvaluator.ResetKey(wholeMinute.AddMilliseconds(-1600)), 1_800_000_000L, "Codex's 58/59-second readings key alike");
+Expect(UsageAlertEvaluator.ResetKey(wholeMinute.AddHours(5)) != UsageAlertEvaluator.ResetKey(wholeMinute), "the next window instance keeps its own key");
+
+var jitterNow = wholeMinute.AddMinutes(-5);
+var jitterSettings = new UsageAlertSettings(true, 20, 10, 10);
+string JitterResetIds(DateTimeOffset reset)
+{
+    var usage = new ProviderUsage(Provider.Claude, 60, 90, reset, null, UsageSource.Api, null, null, null, jitterNow);
+    var jitterSnapshot = new UsageSnapshot(usage, ProviderUsage.Unavailable(Provider.Codex, "Disabled"), jitterNow);
+    return string.Join(",", UsageAlertEvaluator.Candidates(jitterSnapshot, jitterSettings, jitterNow).Select(candidate => candidate.Id));
+}
+var earlyReset = wholeMinute.AddMilliseconds(-200);
+var lateReset = wholeMinute.AddMilliseconds(300);
+ExpectEqual(JitterResetIds(earlyReset), "claude-5h-reset-1800000000", "the reset warning names the minute");
+ExpectEqual(JitterResetIds(lateReset), JitterResetIds(earlyReset), "a reset that flips across a second keeps its warning id");
+string JitterDepletionIds(DateTimeOffset reset)
+{
+    var forecast = new UsageForecast(30, 60, jitterNow.AddMinutes(1), true);
+    var input = new ForecastAlertInput(Provider.Claude, ForecastWindow.FiveHour, forecast, reset);
+    return string.Join(",", UsageForecastAlert.Candidates(new[] { input }, enabled: true).Select(candidate => candidate.Id));
+}
+ExpectEqual(JitterDepletionIds(lateReset), JitterDepletionIds(earlyReset), "a reset that flips across a second keeps its depletion id");
+string JitterFreedIds(DateTimeOffset reset)
+{
+    var before = new ProviderUsage(Provider.Claude, 5, 90, reset, null, UsageSource.Api, null, null, null, wholeMinute.AddMinutes(-10));
+    var after = new ProviderUsage(Provider.Claude, 100, 90, null, null, UsageSource.Api, null, null, null, wholeMinute.AddMinutes(1));
+    var previous = new Dictionary<Provider, ProviderUsage> { [Provider.Claude] = before };
+    var current = new UsageSnapshot(after, ProviderUsage.Unavailable(Provider.Codex, "Disabled"), after.UpdatedAt);
+    return string.Join(",", UsageAlertEvaluator.FreedUpCandidates(previous, current, jitterSettings).Select(candidate => candidate.Id));
+}
+ExpectEqual(JitterFreedIds(lateReset), JitterFreedIds(earlyReset), "a reset that flips across a second keeps its freed id");
+ExpectEqual(JitterFreedIds(earlyReset), "claude-5h-freed-1800000000", "the freed alert names the minute too");
 ExpectEqual(UsageForecastAlert.Candidates(new[] { forecastAlertInput }, enabled: false).Count, 0, "Forecast alert suppressed when disabled");
 var safeForecastInput = new ForecastAlertInput(Provider.Claude, ForecastWindow.FiveHour, earlyResetForecast, now.AddHours(1));
 ExpectEqual(UsageForecastAlert.Candidates(new[] { safeForecastInput }, enabled: true).Count, 0, "No forecast alert when the reset comes first");

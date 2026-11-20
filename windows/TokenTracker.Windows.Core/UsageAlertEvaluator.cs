@@ -121,6 +121,16 @@ public static class UsageAlertEvaluator
         return date <= now;
     }
 
+    /// The part of an alert id that names the window instance, in Unix seconds
+    /// rounded to the nearest minute. Providers report the same reset a fraction
+    /// of a second apart from poll to poll — Claude's whole-minute resets came
+    /// back as 04:59:59 and 05:00:00 in turn — so whole seconds gave one window a
+    /// new id on every flip, and the tray, which only remembers ids still active,
+    /// sent the same alert again each time. Distinct instances of one window are
+    /// hours apart, so rounding never merges two of them.
+    public static long ResetKey(DateTimeOffset resetAt) =>
+        (long)Math.Round(resetAt.ToUnixTimeMilliseconds() / 60000.0, MidpointRounding.AwayFromZero) * 60;
+
     /// How long a cached reading may stand before the tray is quietly out of
     /// date: three missed polls, so one failed fetch is not news, with a floor of
     /// 30 minutes — the same freshness bound the status line bridge uses, and
@@ -214,7 +224,7 @@ public static class UsageAlertEvaluator
                 }
 
                 candidates.Add(new UsageAlertCandidate(
-                    $"{provider.ToId()}-{label}-freed-{resetDate.ToUnixTimeSeconds()}",
+                    $"{provider.ToId()}-{label}-freed-{ResetKey(resetDate)}",
                     localizer.Text(L10nKey.FreedUpAlertTitle),
                     localizer.Text(L10nKey.FreedUpAlertBody)
                         .Replace("{provider}", after.DisplayName, StringComparison.Ordinal)
@@ -290,7 +300,7 @@ public static class UsageAlertEvaluator
             }
 
             var minutes = Math.Max(0, (int)Math.Ceiling(timeLeft.TotalMinutes));
-            var resetId = date.ToUnixTimeSeconds();
+            var resetId = ResetKey(date);
             yield return new UsageAlertCandidate(
                 $"{usage.Provider.ToId()}-{label}-reset-{resetId}",
                 localizer.Text(L10nKey.ResetAlertTitle),

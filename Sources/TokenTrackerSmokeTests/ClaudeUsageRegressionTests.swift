@@ -4,6 +4,58 @@ import TokenTrackerCore
 func runClaudeUsageRegressionTests() throws {
     try verifyClaudeResponses()
     try verifyCacheLifetime()
+    verifyLapsedCachedWindows()
+}
+
+/// A cached reading stands in for hours; a window whose reset passed in that time
+/// has refilled, so its old number must not be shown. Mirrored in the Windows tests.
+private func verifyLapsedCachedWindows() {
+    let now = Date(timeIntervalSince1970: 1_800_000_000)
+    let measuredAt = now.addingTimeInterval(-3 * 3600)
+    func reading(_ provider: Provider, fiveHour: Int?, reset5h: Date?, sevenDay: Int?, reset7d: Date?) -> ProviderUsage {
+        ProviderUsage(provider: provider, remainingPercent5h: fiveHour, remainingPercent7d: sevenDay,
+                      resetAt5h: reset5h, resetAt7d: reset7d, source: .api, error: nil, plan: nil,
+                      model: nil, updatedAt: measuredAt)
+    }
+    func reuse(claude: ProviderUsage, codex: ProviderUsage? = nil) -> UsageSnapshot {
+        let stale = UsageSnapshot(claude: claude, codex: codex ?? .unavailable(.codex, error: "Disabled"), updatedAt: measuredAt)
+        return UsageSnapshotCachePolicy.apply(current: failure(at: now), stale: stale, codexEnabled: codex != nil, updatedAt: now)
+    }
+    let lapsed = now.addingTimeInterval(-2 * 3600)
+    let live = now.addingTimeInterval(24 * 3600)
+
+    let fiveHourLapsed = reuse(claude: reading(.claude, fiveHour: 3, reset5h: lapsed, sevenDay: 60, reset7d: live)).claude
+    expectEqual(fiveHourLapsed.source, .staleCache, "A reading with one live window is still carried")
+    expect(fiveHourLapsed.remainingPercent5h == nil, "A window whose reset passed loses its cached number")
+    expectEqual(fiveHourLapsed.resetAt5h, lapsed, "Its reset instant stays, so the menu says it has reset")
+    expectEqual(fiveHourLapsed.remainingPercent7d, 60, "A window still running keeps its cached number")
+    expectEqual(fiveHourLapsed.error, "HTTP 429 from Claude API", "The carried reading keeps the current failure")
+    expectEqual(DisplayFormatter.displayPercent(fiveHourLapsed), 60, "The menu bar falls back to the live window")
+
+    // The case the review reproduced: both windows reset while the token was lapsed,
+    // and the menu bar still read `AI 6%` in the 7d warning colour.
+    let bothLapsed = reuse(claude: reading(.claude, fiveHour: 3, reset5h: lapsed, sevenDay: 6, reset7d: now.addingTimeInterval(-600)))
+    expectEqual(bothLapsed.claude.source, .unavailable, "A reading with no live window is not carried at all")
+    expectEqual(bothLapsed.claude.error, "HTTP 429 from Claude API", "It reports the current failure instead")
+    expectEqual(DisplayFormatter.statusTitle(snapshot: bothLapsed, mode: .lowestRemaining, showResetCountdown: true), "AI --", "No stale low number reaches the menu bar")
+    expect(!DisplayFormatter.isSevenDayWarning(bothLapsed.claude), "Nor its warning colour")
+
+    let resetsNow = reuse(claude: reading(.claude, fiveHour: 3, reset5h: now, sevenDay: 60, reset7d: live)).claude
+    expect(resetsNow.remainingPercent5h == nil, "A reset at this very instant has passed, as the alerts judge it")
+    let unknownReset = reuse(claude: reading(.claude, fiveHour: 3, reset5h: nil, sevenDay: nil, reset7d: nil)).claude
+    expectEqual(unknownReset.remainingPercent5h, 3, "A window with no reset instant cannot be judged and is kept")
+    expectEqual(unknownReset.source, .staleCache, "So the reading is still carried")
+    let allLive = reading(.claude, fiveHour: 3, reset5h: now.addingTimeInterval(600), sevenDay: 6, reset7d: live)
+    let carried = reuse(claude: allLive).claude
+    expectEqual(carried.remainingPercent5h, 3, "A low window that has not reset keeps its number")
+    expectEqual(carried.remainingPercent7d, 6, "Both windows of it")
+
+    let codexLapsed = reuse(
+        claude: allLive,
+        codex: reading(.codex, fiveHour: nil, reset5h: nil, sevenDay: 4, reset7d: lapsed)
+    )
+    expectEqual(codexLapsed.codex.source, .unavailable, "Codex is held to the same rule")
+    expectEqual(codexLapsed.codex.error, "HTTP 429 from Codex API", "With its own failure reason")
 }
 
 private func verifyClaudeResponses() throws {

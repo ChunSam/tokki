@@ -119,6 +119,17 @@ public enum UsageAlertEvaluator {
         return resetAt <= now
     }
 
+    /// The part of an alert id that names the window instance, in Unix seconds
+    /// rounded to the nearest minute. Providers report the same reset a fraction
+    /// of a second apart from poll to poll — Claude's whole-minute resets came
+    /// back as `04:59:59` and `05:00:00` in turn — so whole seconds gave one
+    /// window a new id on every flip, and the coordinators, which only remember
+    /// ids still active, sent the same alert again each time. Distinct instances
+    /// of one window are hours apart, so rounding never merges two of them.
+    public static func resetKey(_ resetAt: Date) -> Int {
+        Int((resetAt.timeIntervalSince1970 / 60).rounded()) * 60
+    }
+
     /// How long a cached reading may stand before the menu bar is quietly out of
     /// date: three missed polls, so one failed fetch is not news, with a floor of
     /// 30 minutes — the same freshness bound the status line bridge uses, and
@@ -194,7 +205,7 @@ public enum UsageAlertEvaluator {
                     return nil
                 }
                 return UsageAlertCandidate(
-                    id: "\(provider.rawValue)-\(window.label)-freed-\(Int(resetAt.timeIntervalSince1970))",
+                    id: "\(provider.rawValue)-\(window.label)-freed-\(resetKey(resetAt))",
                     title: localizer.text(.freedUpAlertTitle),
                     body: localizer.text(.freedUpAlertBody)
                         .replacingOccurrences(of: "{provider}", with: provider.displayName)
@@ -255,7 +266,7 @@ public enum UsageAlertEvaluator {
                 return nil
             }
             let minutes = max(0, Int(ceil(timeLeft / 60)))
-            let resetID = Int(date.timeIntervalSince1970)
+            let resetID = resetKey(date)
             return UsageAlertCandidate(
                 id: "\(usage.provider.rawValue)-\(reset.label)-reset-\(resetID)",
                 title: localizer.text(.resetAlertTitle),
