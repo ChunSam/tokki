@@ -14,7 +14,7 @@
     <AssemblyTitle>Tokki</AssemblyTitle>
     <!-- Local default, kept in step with scripts/build_app.sh's APP_VERSION; release
          publishes override it from the tag and stamp the run number into the revision. -->
-    <Version>1.4.0</Version>
+    <Version>1.4.1</Version>
   </PropertyGroup>
 
   <ItemGroup>
