@@ -6,7 +6,7 @@ import enum
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from .alerts import AlertCandidate
+from .alerts import AlertCandidate, reset_key
 from .expiry import clamp_percent
 from .history import HistoryEntry, remaining
 from .models import ForecastWindow, Provider, ProviderUsage, UsageSource
@@ -95,7 +95,7 @@ def forecast_alerts(inputs: list[ForecastAlertInput], enabled: bool, text) -> li
             continue
         label = short_label(item.window)
         out.append(AlertCandidate(
-            f"{item.provider.value}-{label}-empty-before-reset-{int(item.reset_at.timestamp())}",
+            f"{item.provider.value}-{label}-empty-before-reset-{reset_key(item.reset_at)}",
             text("depletion_alert_title"),
             text("depletion_alert_body", provider=item.provider.display_name, window=label, time=duration_text(item.forecast.seconds_to_empty)),
         ))

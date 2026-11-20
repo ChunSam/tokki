@@ -36,7 +36,7 @@ except (ValueError, ImportError):
 
 from . import VERSION, autostart, diagnostics, tray_image
 from .core import admin_cost, alerts, cost, display, forecast, history, issues, pause, paths, update_check
-from .core.cache import CacheStore, apply_cache_policy
+from .core.cache import CacheStore, apply_cache_policy, without_lapsed_windows
 from .core.cli_refresh import ClaudeCliRefresher
 from .core.client import UsageClient
 from .core.models import AppLanguage, DisplayMode, ForecastWindow, Provider, ProviderLabelStyle, ProviderUsage, UsageSnapshot, UsageSource
@@ -74,11 +74,15 @@ class TokkiApp:
         self.history_store = history.HistoryStore()
         self.history = self.history_store.load()
         self.client = UsageClient(cli_refresher=ClaudeCliRefresher())
-        self.snapshot: UsageSnapshot | None = self.cache_store.load(self._stale_tolerance(), _now())
+        # What the last poll carried forward, numbers and all: what the cache file
+        # holds and what the next poll falls back on. The menu shows `snapshot`,
+        # the same with the number of any window that has reset since hidden.
+        self.carried: UsageSnapshot | None = self.cache_store.load(self._stale_tolerance(), _now())
+        self.snapshot: UsageSnapshot | None = without_lapsed_windows(self.carried, _now()) if self.carried else None
         self.delivered_alerts: set[str] = set()
         # Each provider's last reading with numbers, for telling when a low window
         # has refilled. Seeded from the cache so a reset during downtime counts.
-        self.last_readings = alerts.last_readings({}, self.snapshot) if self.snapshot else {}
+        self.last_readings = alerts.last_readings({}, self.carried) if self.carried else {}
         self.refreshing = False
         self.poll_source: int | None = None
         self.wake_source: int | None = None
@@ -211,12 +215,13 @@ class TokkiApp:
         self.refreshing = False
         now = _now()
         merged = apply_cache_policy(
-            current, self.snapshot, now,
+            current, self.carried, now,
             claude_enabled=self.settings.ClaudeEnabled,
             codex_enabled=self.settings.CodexEnabled,
             max_age=self._stale_tolerance(),
         )
-        self.snapshot = merged
+        self.carried = merged
+        self.snapshot = without_lapsed_windows(merged, now)
         # When the provider measured, not when this poll ran.
         measured = [u.updated_at for u in (current.claude, current.codex) if u.source in (UsageSource.API, UsageSource.STATUS_LINE)]
         if measured:
@@ -225,7 +230,7 @@ class TokkiApp:
             self.cache_store.save(merged)
         # Only this poll's API measurements enter the record.
         self.history = self.history_store.append(history.measurements_only(current), self.settings.HistoryRetentionDays, now)
-        self.notify(merged, now)
+        self.notify(self.snapshot, now)
         self.render()
         self.check_for_updates_if_due()
         self.refresh_costs()

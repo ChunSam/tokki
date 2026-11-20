@@ -52,6 +52,19 @@ def _window_has_reset(reset_at: datetime | None, now: datetime) -> bool:
     return reset_at is not None and reset_at <= now
 
 
+def reset_key(reset_at: datetime) -> int:
+    """The part of an alert id that names the window instance, in Unix seconds
+    rounded to the nearest minute, halves away from zero as Swift and C# round.
+    Providers report the same reset a fraction of a second apart from poll to
+    poll — Claude's whole-minute resets came back as 04:59:59 and 05:00:00 in
+    turn — so whole seconds gave one window a new id on every flip, and the tray,
+    which only remembers ids still active, sent the same alert again each time.
+    Distinct instances of one window are hours apart, so rounding never merges
+    two of them."""
+    minutes = reset_at.timestamp() / 60
+    return int(math.copysign(math.floor(abs(minutes) + 0.5), minutes)) * 60
+
+
 def _stalled(usage: ProviderUsage, settings: AlertSettings, now: datetime, text: Text):
     """A cached reading that has aged past the threshold. A provider showing "--"
     is left alone: it cannot be mistaken for a live number."""
@@ -86,7 +99,7 @@ def _reset_alerts(usage: ProviderUsage, settings: AlertSettings, now: datetime, 
             continue
         minutes = max(0, math.ceil(left.total_seconds() / 60))
         yield AlertCandidate(
-            f"{usage.provider.value}-{label}-reset-{int(reset_at.timestamp())}",
+            f"{usage.provider.value}-{label}-reset-{reset_key(reset_at)}",
             text("reset_alert_title"),
             text("reset_alert_body", provider=usage.display_name, window=label, time=f"{minutes}m", percent=unused),
         )
@@ -142,7 +155,7 @@ def freed_up_candidates(
                     or now_percent is None or now_percent <= threshold or now_percent <= was):
                 continue
             out.append(AlertCandidate(
-                f"{provider.value}-{label}-freed-{int(reset_at.timestamp())}",
+                f"{provider.value}-{label}-freed-{reset_key(reset_at)}",
                 text("freed_up_alert_title"),
                 text("freed_up_alert_body", provider=after.display_name, window=label, percent=now_percent),
             ))
