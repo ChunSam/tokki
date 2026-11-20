@@ -534,9 +534,54 @@ expect(UsageForecastText.menuLine(forecast: nil, window: .sevenDay, localizer: f
 let forecastAlertInput = ForecastAlertInput(provider: .claude, window: .fiveHour, forecast: steadyForecast!, resetAt: now.addingTimeInterval(10800))
 expectEqual(
     UsageForecastAlert.candidates(inputs: [forecastAlertInput], enabled: true).map(\.id),
-    ["claude-5h-empty-before-reset-\(Int(now.addingTimeInterval(10800).timeIntervalSince1970))"],
+    ["claude-5h-empty-before-reset-\(UsageAlertEvaluator.resetKey(now.addingTimeInterval(10800)))"],
     "forecast alert fires when depletion precedes reset"
 )
+
+// Alert ids name the window by its reset rounded to the minute. Providers report
+// one reset a fraction of a second apart from poll to poll — Claude's came back as
+// 04:59:59 and 05:00:00 in turn — and a new id each time sent the alert again.
+let wholeMinute = Date(timeIntervalSince1970: 1_800_000_000)
+expectEqual(UsageAlertEvaluator.resetKey(wholeMinute), 1_800_000_000, "a whole-minute reset keys to itself")
+expectEqual(UsageAlertEvaluator.resetKey(wholeMinute.addingTimeInterval(-0.4)), 1_800_000_000, "a reset reported just early keys to the same minute")
+expectEqual(UsageAlertEvaluator.resetKey(wholeMinute.addingTimeInterval(0.4)), 1_800_000_000, "a reset reported just late keys to the same minute")
+expectEqual(UsageAlertEvaluator.resetKey(wholeMinute.addingTimeInterval(29)), 1_800_000_000, "under half a minute rounds down")
+expectEqual(UsageAlertEvaluator.resetKey(wholeMinute.addingTimeInterval(30)), 1_800_000_060, "half a minute rounds up")
+expectEqual(UsageAlertEvaluator.resetKey(wholeMinute.addingTimeInterval(-1.6)), 1_800_000_000, "Codex's 58/59-second readings key alike")
+expect(UsageAlertEvaluator.resetKey(wholeMinute.addingTimeInterval(5 * 3600)) != UsageAlertEvaluator.resetKey(wholeMinute), "the next window instance keeps its own key")
+
+let jitterNow = wholeMinute.addingTimeInterval(-300)
+let jitterSettings = UsageAlertSettings(notificationsEnabled: true, fiveHourThreshold: 20, sevenDayThreshold: 10, resetWarningMinutes: 10)
+func jitterResetIDs(_ reset: Date) -> [String] {
+    let usage = ProviderUsage(provider: .claude, remainingPercent5h: 60, remainingPercent7d: 90, resetAt5h: reset, resetAt7d: nil, source: .api, error: nil, plan: nil, model: nil, updatedAt: jitterNow)
+    return UsageAlertEvaluator.candidates(
+        snapshot: UsageSnapshot(claude: usage, codex: .unavailable(.codex, error: "Disabled"), updatedAt: jitterNow),
+        settings: jitterSettings,
+        now: jitterNow
+    ).map(\.id)
+}
+let earlyReset = wholeMinute.addingTimeInterval(-0.2)
+let lateReset = wholeMinute.addingTimeInterval(0.3)
+expectEqual(jitterResetIDs(earlyReset), ["claude-5h-reset-1800000000"], "the reset warning names the minute")
+expectEqual(jitterResetIDs(lateReset), jitterResetIDs(earlyReset), "a reset that flips across a second keeps its warning id")
+func jitterDepletionIDs(_ reset: Date) -> [String] {
+    UsageForecastAlert.candidates(
+        inputs: [ForecastAlertInput(provider: .claude, window: .fiveHour, forecast: UsageForecast(burnPerHour: 30, secondsToEmpty: 60, emptyAt: jitterNow.addingTimeInterval(60), willEmptyBeforeReset: true), resetAt: reset)],
+        enabled: true
+    ).map(\.id)
+}
+expectEqual(jitterDepletionIDs(lateReset), jitterDepletionIDs(earlyReset), "a reset that flips across a second keeps its depletion id")
+func jitterFreedIDs(_ reset: Date) -> [String] {
+    let before = ProviderUsage(provider: .claude, remainingPercent5h: 5, remainingPercent7d: 90, resetAt5h: reset, resetAt7d: nil, source: .api, error: nil, plan: nil, model: nil, updatedAt: wholeMinute.addingTimeInterval(-600))
+    let after = ProviderUsage(provider: .claude, remainingPercent5h: 100, remainingPercent7d: 90, resetAt5h: nil, resetAt7d: nil, source: .api, error: nil, plan: nil, model: nil, updatedAt: wholeMinute.addingTimeInterval(60))
+    return UsageAlertEvaluator.freedUpCandidates(
+        previous: [.claude: before],
+        current: UsageSnapshot(claude: after, codex: .unavailable(.codex, error: "Disabled"), updatedAt: after.updatedAt),
+        settings: jitterSettings
+    ).map(\.id)
+}
+expectEqual(jitterFreedIDs(lateReset), jitterFreedIDs(earlyReset), "a reset that flips across a second keeps its freed id")
+expectEqual(jitterFreedIDs(earlyReset), ["claude-5h-freed-1800000000"], "the freed alert names the minute too")
 expectEqual(UsageForecastAlert.candidates(inputs: [forecastAlertInput], enabled: false).count, 0, "forecast alert suppressed when disabled")
 let safeForecastInput = ForecastAlertInput(provider: .claude, window: .fiveHour, forecast: earlyResetForecast!, resetAt: now.addingTimeInterval(3600))
 expectEqual(UsageForecastAlert.candidates(inputs: [safeForecastInput], enabled: true).count, 0, "no forecast alert when the reset comes first")

@@ -82,20 +82,43 @@ public enum UsageSnapshotCachePolicy {
 
         var snapshot = current
 
-        if claudeEnabled, !snapshot.claude.isAvailable, canReuse(stale.claude, at: updatedAt, maxAge: maxAge) {
-            snapshot.claude = markStale(stale.claude, error: snapshot.claude.error)
+        if claudeEnabled, !snapshot.claude.isAvailable, let reusable = reusable(stale.claude, at: updatedAt, maxAge: maxAge) {
+            snapshot.claude = markStale(reusable, error: snapshot.claude.error)
         }
 
-        if codexEnabled, !snapshot.codex.isAvailable, canReuse(stale.codex, at: updatedAt, maxAge: maxAge) {
-            snapshot.codex = markStale(stale.codex, error: snapshot.codex.error)
+        if codexEnabled, !snapshot.codex.isAvailable, let reusable = reusable(stale.codex, at: updatedAt, maxAge: maxAge) {
+            snapshot.codex = markStale(reusable, error: snapshot.codex.error)
         }
 
         return snapshot
     }
 
-    private static func canReuse(_ usage: ProviderUsage, at now: Date, maxAge: TimeInterval) -> Bool {
+    /// What of a last good reading may still stand in, or `nil` when nothing may.
+    private static func reusable(_ usage: ProviderUsage, at now: Date, maxAge: TimeInterval) -> ProviderUsage? {
         let age = now.timeIntervalSince(usage.updatedAt)
-        return usage.isAvailable && usage.source != .unavailable && age >= 0 && age <= maxAge
+        guard usage.source != .unavailable, age >= 0, age <= maxAge else { return nil }
+        let live = withoutLapsedWindows(usage, at: now)
+        return live.isAvailable ? live : nil
+    }
+
+    /// A balance only describes the window instance it was measured in. Once that
+    /// window's reset has passed it has refilled, so the cached number is not a low
+    /// reading but a wrong one — and the fallback can last for hours, long enough
+    /// to show a 5h window's last few percent, in the 7d warning colour even, well
+    /// after both had reset. The alerts already skip such a window
+    /// (`windowHasReset`); this keeps the display in step. The number goes and the
+    /// reset instant stays, so the menu says the window has reset rather than that
+    /// it was never reported. A window with no reset instant cannot be judged and
+    /// is kept.
+    private static func withoutLapsedWindows(_ usage: ProviderUsage, at now: Date) -> ProviderUsage {
+        var copy = usage
+        if let reset = copy.resetAt5h, reset <= now {
+            copy.remainingPercent5h = nil
+        }
+        if let reset = copy.resetAt7d, reset <= now {
+            copy.remainingPercent7d = nil
+        }
+        return copy
     }
 
     private static func markStale(_ usage: ProviderUsage, error: String?) -> ProviderUsage {
