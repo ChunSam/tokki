@@ -1,6 +1,7 @@
 import Foundation
 #if canImport(Security)
 import Security
+import LocalAuthentication
 #endif
 
 /// Where an organization's Admin API key is kept. An Admin key can manage the
@@ -58,10 +59,12 @@ public enum AdminKeyText {
 /// Mac is unlocked and never synced off it.
 public struct KeychainAdminKeyStore: AdminKeyStoring {
     private let service: String
+    private let allowAuthenticationUI: Bool
 
     // Keeps the pre-Tokki name: keys saved by Token Tracker are found under it.
-    public init(service: String = "Token Tracker") {
+    public init(service: String = "Token Tracker", allowAuthenticationUI: Bool = true) {
         self.service = service
+        self.allowAuthenticationUI = allowAuthenticationUI
     }
 
     public func key(for provider: Provider) -> String? {
@@ -95,11 +98,20 @@ public struct KeychainAdminKeyStore: AdminKeyStoring {
     }
 
     private func baseQuery(_ provider: Provider) -> [String: Any] {
-        [
+        var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: provider.adminKeyAccount
         ]
+        if !allowAuthenticationUI {
+            // Background cost refresh must not put up a keychain authorization
+            // dialog after an ad-hoc-signed app update. The settings dialog omits
+            // this context because opening it is an explicit user action.
+            let context = LAContext()
+            context.interactionNotAllowed = true
+            query[kSecUseAuthenticationContext as String] = context
+        }
+        return query
     }
 }
 #endif

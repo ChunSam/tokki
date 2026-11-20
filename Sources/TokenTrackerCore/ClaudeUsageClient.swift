@@ -1,6 +1,7 @@
 import Foundation
 
 struct ClaudeUsageClient: Sendable {
+    private static let keychainReadTimeout: TimeInterval = 10
     private let http: HTTPClient
     private let usageURL = URL(string: "https://api.anthropic.com/api/oauth/usage")!
     private let rateLimitState = RateLimitState(store: RateLimitStore(url: AppPaths.claudeRateLimit))
@@ -147,8 +148,12 @@ struct ClaudeUsageClient: Sendable {
         process.standardOutput = pipe
         process.standardError = Pipe()
         do {
-            try process.run()
-            process.waitUntilExit()
+            guard try ProcessDeadline.run(process, timeout: Self.keychainReadTimeout) else {
+                // `security` can wait forever behind a locked keychain or an
+                // unanswered access dialog. End this attempt so later refreshes
+                // can still run; the file credential remains available below.
+                return nil
+            }
             guard process.terminationStatus == 0 else { return nil }
             let data = pipe.fileHandleForReading.readDataToEndOfFile()
             guard
