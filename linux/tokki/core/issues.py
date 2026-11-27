@@ -77,7 +77,6 @@ def kind_of(error: str) -> IssueKind:
 _RECOVERY_KEYS = {
     IssueKind.DISABLED: "recovery_enable_provider",
     IssueKind.RATE_LIMITED: "recovery_wait_for_cooldown",
-    IssueKind.MISSING_CREDENTIALS: "recovery_check_credentials",
     IssueKind.INVALID_RESPONSE: "recovery_update_or_try_later",
     IssueKind.TIMED_OUT: "recovery_check_network",
     IssueKind.NETWORK: "recovery_check_network",
@@ -93,6 +92,8 @@ def _recovery(error: str | None, provider: Provider, text) -> str | None:
     if kind is IssueKind.EXPIRED_CREDENTIALS:
         # Name only the command the user actually has to run.
         return text("recovery_sign_in_again_claude" if provider is Provider.CLAUDE else "recovery_sign_in_again_codex")
+    if kind is IssueKind.MISSING_CREDENTIALS:
+        return text("recovery_sign_in_claude" if provider is Provider.CLAUDE else "recovery_sign_in_codex")
     key = _RECOVERY_KEYS.get(kind)
     return text(key) if key else None
 
@@ -116,6 +117,13 @@ def issue(usage: ProviderUsage, text) -> UsageIssue:
 # --- the credential store -------------------------------------------------------------------
 
 STALE_AFTER = timedelta(hours=8)
+# A Codex access token lives 10 days (measured 2026-11-27), so a younger store that
+# lapsed was cut short by something else and its age explains nothing.
+CODEX_STALE_AFTER = timedelta(days=10)
+
+
+def stale_after(provider: Provider) -> timedelta:
+    return STALE_AFTER if provider is Provider.CLAUDE else CODEX_STALE_AFTER
 
 
 @dataclass(frozen=True)
@@ -138,13 +146,14 @@ class CredentialSource:
 
 
 def stale_line(provider: Provider, found: UsageIssue, source: CredentialSource, now: datetime, text) -> str | None:
-    """Nothing has written the Claude store for longer than a token lives: the
-    fix is to run the CLI once, not to wait."""
-    if provider is not Provider.CLAUDE or not found.technical_detail or not found.technical_detail.strip():
+    """Nothing has written this provider's store for longer than its token lives:
+    the fix is to use the CLI once, not to wait. `source` must be that provider's
+    own store; Codex renews `~/.codex/auth.json` only while it is used."""
+    if not found.technical_detail or not found.technical_detail.strip():
         return None
     if kind_of(found.technical_detail) is not IssueKind.EXPIRED_CREDENTIALS:
         return None
     age = source.age(now)
-    if age is None or age < STALE_AFTER:
+    if age is None or age < stale_after(provider):
         return None
     return text("credential_stale", age=duration_text(age.total_seconds()))

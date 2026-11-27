@@ -333,10 +333,12 @@ internal sealed class TrayAppContext : ApplicationContext
         }
         else
         {
-            // Read the credential store once per rebuild, not once per provider row.
+            // Read each provider's credential store once per rebuild. Codex keeps its
+            // own file, judged against its own token life.
             var claudeCredentialSource = ClaudeCredentialSource.Detect(AppPaths.ClaudeCredentialsPath());
+            var codexCredentialSource = ClaudeCredentialSource.Detect(AppPaths.CodexAuthPath());
             AddProvider(menu, snapshot.Claude, claudeCredentialSource, AdminCost(Provider.Claude));
-            AddProvider(menu, snapshot.Codex, claudeCredentialSource, AdminCost(Provider.Codex));
+            AddProvider(menu, snapshot.Codex, codexCredentialSource, AdminCost(Provider.Codex));
             menu.Items.Add(new ToolStripSeparator());
             AddDisabled(menu.Items, $"{Localizer.Text(L10nKey.Updated)} {Relative(snapshot.UpdatedAt)} {Localizer.Text(L10nKey.Ago)}");
             AddDisabled(
@@ -410,7 +412,7 @@ internal sealed class TrayAppContext : ApplicationContext
     private void AddProvider(
         ContextMenuStrip menu,
         ProviderUsage usage,
-        ClaudeCredentialSource claudeCredentialSource,
+        ClaudeCredentialSource credentialSource,
         AdminCostView? cost)
     {
         var issue = UsageIssueFormatter.Issue(usage, Localizer);
@@ -446,7 +448,7 @@ internal sealed class TrayAppContext : ApplicationContext
         var staleCredentials = CredentialStoreAdvice.StaleLine(
             usage.Provider,
             issue,
-            claudeCredentialSource,
+            credentialSource,
             DateTimeOffset.Now,
             Localizer);
         if (staleCredentials is not null)

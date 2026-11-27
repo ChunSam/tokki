@@ -297,6 +297,10 @@ Tokki는 각 CLI가 저장해 둔 액세스 토큰을 읽기만 하고, 직접 �
 
 Claude나 Codex의 상태가 `Saved token expired` / `저장된 토큰 만료`이면 해당 CLI의 토큰을 갱신한 뒤 새로고침합니다.
 
+Codex는 쓰는 동안에만 토큰을 갱신하고, 액세스 토큰은 약 10일을 삽니다. 그래서 열흘 넘게 Codex를
+쓰지 않으면 만료됩니다. `codex`에서 요청을 한 번 보내면 저장된 토큰이 갱신됩니다
+(`codex login status`로는 갱신되지 않습니다). 그래도 안 되면 다시 로그인합니다.
+
 ```bash
 codex login
 ```

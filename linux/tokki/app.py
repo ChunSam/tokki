@@ -462,7 +462,7 @@ class TokkiApp:
         found = issues.issue(usage, text)
         if found.kind is not issues.IssueKind.OK:
             lines.append(f"    {found.title}" + (f" — {found.recovery}" if found.recovery else ""))
-            stale = issues.stale_line(usage.provider, found, issues.CredentialSource.detect(paths.claude_credentials_path()), now, text)
+            stale = issues.stale_line(usage.provider, found, issues.CredentialSource.detect(paths.claude_credentials_path() if usage.provider is Provider.CLAUDE else paths.codex_auth_path()), now, text)
             if stale:
                 lines.append("    " + stale)
         money = cost.subscription_line(usage, text)

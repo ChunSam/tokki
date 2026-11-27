@@ -1015,6 +1015,17 @@ class IssueTests(unittest.TestCase):
         self.assertIn("/login", found.recovery)
         codex = issues.issue(ProviderUsage.unavailable(Provider.CODEX, "HTTP 401 from Codex API", NOW), self.EN)
         self.assertIn("codex login", codex.recovery)
+        # A lapsed Codex token is renewed by using Codex once; signing in is the fallback.
+        self.assertIn("`codex`", codex.recovery)
+        missing_claude = issues.issue(ProviderUsage.unavailable(Provider.CLAUDE, "Missing credentials", NOW), self.EN)
+        self.assertIn("/login", missing_claude.recovery)
+        self.assertNotIn("codex", missing_claude.recovery)
+        missing_codex = issues.issue(ProviderUsage.unavailable(Provider.CODEX, "Missing credentials", NOW), self.EN)
+        self.assertIn("codex login", missing_codex.recovery)
+        self.assertNotIn("/login", missing_codex.recovery)
+        ko = Localizer(AppLanguage.KOREAN).text
+        for key in ("recovery_sign_in_claude", "recovery_sign_in_codex"):
+            self.assertNotEqual(ko(key), self.EN(key))
         cached = issues.issue(usage(five=50, source=UsageSource.STALE_CACHE, error="Timed out contacting Claude API"), self.EN)
         self.assertIs(cached.kind, issues.IssueKind.USING_CACHED_DATA)
         self.assertEqual(cached.recovery, "Check your network connection and try again.")
@@ -1030,8 +1041,12 @@ class IssueTests(unittest.TestCase):
         self.assertIsNone(issues.stale_line(Provider.CLAUDE, expired, store, NOW + issues.STALE_AFTER - timedelta(minutes=1), self.EN))
         limited = issues.issue(ProviderUsage.unavailable(Provider.CLAUDE, "HTTP 429", NOW), self.EN)
         self.assertIsNone(issues.stale_line(Provider.CLAUDE, limited, store, NOW + timedelta(hours=48), self.EN))
-        codex = issues.issue(ProviderUsage.unavailable(Provider.CODEX, "HTTP 401", NOW), self.EN)
+        # Codex: its own store, judged against its own 10-day token life.
+        codex = issues.issue(ProviderUsage.unavailable(Provider.CODEX, "Credentials expired for Codex API", NOW), self.EN)
+        self.assertEqual(issues.stale_line(Provider.CODEX, codex, store, NOW + timedelta(days=11), self.EN), "Credentials not refreshed in 11d 0h")
         self.assertIsNone(issues.stale_line(Provider.CODEX, codex, store, NOW + timedelta(hours=48), self.EN))
+        codex_limited = issues.issue(ProviderUsage.unavailable(Provider.CODEX, "HTTP 429", NOW), self.EN)
+        self.assertIsNone(issues.stale_line(Provider.CODEX, codex_limited, store, NOW + timedelta(days=11), self.EN))
         carried = issues.issue(usage(five=5, source=UsageSource.STALE_CACHE, error="credentials expired"), self.EN)
         self.assertIsNotNone(issues.stale_line(Provider.CLAUDE, carried, store, NOW + timedelta(hours=48), self.EN))
         self.assertIsNone(issues.stale_line(Provider.CLAUDE, expired, issues.CredentialSource("None", None), NOW + timedelta(hours=48), self.EN))

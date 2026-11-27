@@ -191,7 +191,11 @@ public enum UsageIssueFormatter {
         case .rateLimited:
             return localizer.text(.recoveryWaitForCooldown)
         case .missingCredentials:
-            return localizer.text(.recoveryCheckCredentials)
+            // Same reason as below: one command, the one for this provider.
+            switch provider {
+            case .claude: return localizer.text(.recoverySignInClaude)
+            case .codex: return localizer.text(.recoverySignInCodex)
+            }
         case .expiredCredentials:
             // Name only the command the user actually has to run. Listing both
             // providers made them read past the half that did not apply to them.

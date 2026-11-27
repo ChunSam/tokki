@@ -66,6 +66,11 @@ struct DiagnosticsReporter {
             lines.append("Claude status line record: none")
         }
         lines.append("Codex auth file exists: \(fileExists(at: Self.codexAuthURL))")
+        // Codex renews its store only while it is used, so this age is what says a
+        // lapsed Codex token was simply left alone.
+        let codexSource = ClaudeCredentialSource.detect(credentialsFileURL: Self.codexAuthURL, keychainModifiedAt: nil)
+        lines.append("Codex auth last written: \(codexSource.lastWrittenAt.map(isoString) ?? "unknown")")
+        lines.append("Codex auth age: \(codexSource.age().map(UsageForecaster.durationText) ?? "unknown")")
         for provider in Provider.allCases {
             lines.append(contentsOf: CostDiagnostics.lines(provider: provider, state: costStates[provider] ?? CostState()))
         }
