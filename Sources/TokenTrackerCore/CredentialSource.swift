@@ -90,8 +90,8 @@ public struct ClaudeCredentialSource: Sendable, Equatable {
 /// who signs in through the desktop app has signed in, and the store still will
 /// not move. Saying how long it has been unwritten is what tells the two apart.
 ///
-/// Codex keeps its store in `~/.codex/auth.json` and renews it only while it is
-/// being used, so a Codex left alone past its token life lapses the same way. The
+/// Codex keeps its store in `~/.codex/auth.json` and renews it only when Codex
+/// itself runs, so a Codex left alone past its token life lapses the same way. The
 /// store is read through `ClaudeCredentialSource.detect` with no keychain: the type
 /// describes any file store, the name only records where it started.
 public enum CredentialStoreAdvice {

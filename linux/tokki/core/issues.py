@@ -148,7 +148,7 @@ class CredentialSource:
 def stale_line(provider: Provider, found: UsageIssue, source: CredentialSource, now: datetime, text) -> str | None:
     """Nothing has written this provider's store for longer than its token lives:
     the fix is to use the CLI once, not to wait. `source` must be that provider's
-    own store; Codex renews `~/.codex/auth.json` only while it is used."""
+    own store; Codex renews `~/.codex/auth.json` only when Codex itself runs."""
     if not found.technical_detail or not found.technical_detail.strip():
         return None
     if kind_of(found.technical_detail) is not IssueKind.EXPIRED_CREDENTIALS:
