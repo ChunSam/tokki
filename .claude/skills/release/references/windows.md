@@ -5,8 +5,8 @@ VM 구성과 `scripts/utm-windows-ps.sh`의 동작은 `docs/windows-vm-testing.m
 
 ## 준비
 
-- VM이 꺼져 있으면 사용자에게 UTM에서 켜 달라고 한다. 여기서 `utmctl start Windows`는
-  AppleEvent 오류 -1712로 실패한다.
+- VM을 켤지는 본문 5단계를 따른다. 여기서 `utmctl start Windows`는 2026-11-03에 AppleEvent 오류
+  -1712로, 2026-11-27에 시간 초과(124)로 끝났다. 사용자에게 UTM에서 켜 달라고 한다.
 - 저장소가 공개라 릴리스 파일은 VM 안에서 바로 받는다. Mac에서 받아 push하지 않는다.
 - 확인 폴더는 매번 새로 만든다(`release-X.Y.Z-verify`). 이미 있으면 멈춘다.
 

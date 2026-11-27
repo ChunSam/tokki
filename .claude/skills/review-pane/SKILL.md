@@ -11,6 +11,8 @@ description: herdr 새 창에 읽기 전용 리뷰 에이전트를 띄워 검토
 
 `references/reviewer-settings.json`을 스크래치패드로 복사한다. 필요하면 허용 명령만 더한다.
 **원본은 `references/`다** — 스크래치패드 사본은 다음 세션에 없다.
+스크래치패드가 없거나 도중에 사라지면 이 세션 전용 임시 폴더를 `SP`로 정하고, 권한 파일과
+프롬프트 파일을 그 자리에 다시 만든다 (2026-11-27).
 
 - 허용: 읽기(Read·Grep·Glob), `git diff/log/show/status/blame/merge-base/rev-parse`, 테스트 실행
   (`swift build`, `swift run TokenTrackerSmokeTests`, `python3 -m unittest`), `jq`, `grep`, `sed -n`, `ls`, `wc`.
@@ -20,6 +22,9 @@ description: herdr 새 창에 읽기 전용 리뷰 에이전트를 띄워 검토
 ## 2. 창 열기와 리뷰어 시작
 
 `pane split`은 JSON을 돌려준다. 창 ID는 `result.pane.pane_id`에 있다.
+`--current requires HERDR_PANE_ID`로 실패하면 `herdr pane list`에서 이 세션의 창을 찾아
+`--current` 자리에 그 ID를 넘긴다(예: `herdr pane split w1:p1 …`). `focused: true`만으로 고르지 말고
+창 제목이 이 세션의 것인지도 맞춰 본다. 2026-11-27에는 herdr 창 안에서 돌았는데도 Bash 환경에 이 변수가 없었다.
 
 ```sh
 SP=<이 세션의 스크래치패드>
@@ -31,7 +36,23 @@ herdr agent start reviewer --kind claude --pane "$P" --timeout 60000 -- \
   --permission-mode dontAsk --settings "$SP/reviewer-settings.json"
 ```
 
-리뷰어 종류로 Codex(`--kind codex`)도 고를 수 있다. 다만 이 저장소에서 아직 써 보지 않았다.
+### Codex 리뷰어
+
+2026-11-27에 Codex로 제안서를 읽기 전용 검토했다(재검토는 아직 안 해 봤다). 권한 파일은 Claude용이라
+Codex에는 쓰지 않는다.
+
+```sh
+herdr agent start <이름> --kind codex --pane "$P" --timeout 90000 -- --sandbox read-only --ask-for-approval never
+```
+
+- **시작하면서 스스로 업데이트할 수 있다.** 이날은 `npm install -g @openai/codex`(0.154.0 → 0.172.0)에
+  11분이 걸렸고, 그동안 `codex` 명령이 사라져 있었다. `agent start`는 `agent_not_ready`로 끝난다.
+  `herdr pane read "$P"`로 업데이트 중인지 보고, 끝나면("Please restart Codex") `codex --version`을
+  확인한 뒤 같은 창에서 다시 시작한다.
+- **업데이트 직후 첫 프롬프트는 사라질 수 있다.** 모델 변경 안내가 뜨면서 `--wait`가 바로 `idle`을
+  돌려줬고 답이 없었다. 창에 작업 흔적이 없으면 같은 프롬프트를 다시 보낸다.
+- **결과는 창에서 읽는다.** 4단계의 트랜스크립트 조회는 Claude 리뷰어용이다. Codex는
+  `herdr pane read "$P" --source recent-unwrapped --lines 600`으로 답 전체를 읽었다.
 
 ## 3. 프롬프트 보내기
 
@@ -48,7 +69,8 @@ herdr agent prompt reviewer "$(cat "$SP/reviewer-prompt.md")" --wait --timeout 1
 
 ## 4. 결과 읽기
 
-`--wait`의 출력은 상태(JSON)뿐이다. 본문은 리뷰어의 트랜스크립트에서 마지막 응답을 꺼낸다.
+`--wait`의 출력은 상태(JSON)뿐이다. 본문은 리뷰어의 트랜스크립트에서 마지막 응답을 꺼낸다
+(Claude 리뷰어. Codex는 위 "Codex 리뷰어"를 따른다).
 `herdr agent read --source recent-unwrapped`는 화면의 끝부분만 보여 긴 답이 잘린다.
 
 ```sh
