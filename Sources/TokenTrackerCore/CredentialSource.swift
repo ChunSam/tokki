@@ -81,21 +81,38 @@ public struct ClaudeCredentialSource: Sendable, Equatable {
     }
 }
 
-/// The line the menu was missing when Claude usage stops loading: nothing has
-/// written the credential store for longer than a token lives, so the fix is not
-/// to wait but to run the CLI once.
+/// The line the menu was missing when usage stops loading: nothing has written the
+/// credential store for longer than a token lives, so the fix is not to wait but to
+/// use the CLI once.
 ///
 /// The plain "sign in again" recovery is complete advice for a token that merely
 /// lapsed. It is not the whole story for a store that has been abandoned — a user
 /// who signs in through the desktop app has signed in, and the store still will
 /// not move. Saying how long it has been unwritten is what tells the two apart.
+///
+/// Codex keeps its store in `~/.codex/auth.json` and renews it only while it is
+/// being used, so a Codex left alone past its token life lapses the same way. The
+/// store is read through `ClaudeCredentialSource.detect` with no keychain: the type
+/// describes any file store, the name only records where it started.
 public enum CredentialStoreAdvice {
     /// A Claude access token lives ~8h. Past that, an expired token is not bad
     /// luck: whatever used to refresh the store has stopped.
     public static let staleAfter: TimeInterval = 8 * 3600
 
-    /// `nil` unless this is Claude, the failure is a lapsed token, and the store
-    /// is old enough that nothing can still be refreshing it.
+    /// A Codex access token lives 10 days (measured 2026-11-27: written
+    /// 11-16 17:06:40, expiring 11-26 17:06:40), so a younger store that lapsed
+    /// was cut short by something else and its age explains nothing.
+    public static let codexStaleAfter: TimeInterval = 10 * 24 * 3600
+
+    public static func staleAfter(for provider: Provider) -> TimeInterval {
+        switch provider {
+        case .claude: return staleAfter
+        case .codex: return codexStaleAfter
+        }
+    }
+
+    /// `nil` unless the failure is a lapsed token and `source` — that provider's
+    /// own store — is old enough that nothing can still be refreshing it.
     public static func staleLine(
         provider: Provider,
         issue: UsageIssue,
@@ -103,7 +120,6 @@ public enum CredentialStoreAdvice {
         now: Date = Date(),
         localizer: Localizer = Localizer(language: .english)
     ) -> String? {
-        guard provider == .claude else { return nil }
         // Read past the visible kind to the error underneath it: once the last good
         // reading is being carried across a lapsed token the status reads "using
         // cached data", and the expiry survives only in the error it carries.
@@ -111,7 +127,7 @@ public enum CredentialStoreAdvice {
             let error = issue.technicalDetail,
             UsageIssueFormatter.kind(forError: error) == .expiredCredentials,
             let age = source.age(now: now),
-            age >= staleAfter
+            age >= staleAfter(for: provider)
         else {
             return nil
         }

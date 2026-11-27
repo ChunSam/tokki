@@ -304,6 +304,19 @@ expect(expiredCodexIssue.recovery?.contains("/login") == false, "Codex recovery 
 let expiredClaudeIssue = UsageIssueFormatter.issue(for: .unavailable(.claude, error: "HTTP 401 from Claude API"))
 expect(expiredClaudeIssue.recovery?.contains("/login") == true, "Claude recovery names the Claude sign-in command")
 expect(expiredClaudeIssue.recovery?.contains("codex login") == false, "Claude recovery does not mention Codex")
+// A lapsed Codex token is renewed by using Codex once; signing in is the fallback.
+expect(expiredCodexIssue.recovery?.contains("`codex`") == true, "Codex recovery first says to use Codex once")
+let missingClaudeIssue = UsageIssueFormatter.issue(for: .unavailable(.claude, error: "Missing credentials"))
+expect(missingClaudeIssue.recovery?.contains("/login") == true, "missing Claude credentials name the Claude sign-in command")
+expect(missingClaudeIssue.recovery?.contains("codex") == false, "missing Claude credentials do not mention Codex")
+let missingCodexIssue = UsageIssueFormatter.issue(for: .unavailable(.codex, error: "Missing credentials"))
+expect(missingCodexIssue.recovery?.contains("codex login") == true, "missing Codex credentials name the Codex sign-in command")
+expect(missingCodexIssue.recovery?.contains("/login") == false, "missing Codex credentials do not mention Claude")
+expect(
+    Localizer(language: .korean).text(.recoverySignInClaude) != Localizer(language: .english).text(.recoverySignInClaude)
+        && Localizer(language: .korean).text(.recoverySignInCodex) != Localizer(language: .english).text(.recoverySignInCodex),
+    "both sign-in recoveries have Korean text"
+)
 expectEqual(UsageIssueFormatter.kind(forError: "Timed out contacting Claude API"), .timedOut, "timeout is classified")
 expectEqual(UsageIssueFormatter.kind(forError: "Network error from Claude API: offline"), .network, "network error is classified")
 
@@ -793,14 +806,36 @@ expect(
     ) == nil,
     "a rate limit is not a credential problem, however old the store is"
 )
+// Codex: its own store, judged against its own 10-day token life.
+let codexStore = ClaudeCredentialSource(kind: .credentialsFile, lastWrittenAt: Date(timeIntervalSince1970: 0))
+let expiredCodexStaleIssue = credentialIssue(.codex, error: "Credentials expired for Codex API", source: .unavailable)
+expectEqual(
+    CredentialStoreAdvice.staleLine(
+        provider: .codex,
+        issue: expiredCodexStaleIssue,
+        source: codexStore,
+        now: Date(timeIntervalSince1970: 11 * 24 * 3600)
+    ),
+    "Credentials not refreshed in 11d 0h",
+    "a lapsed Codex token over a store left alone past its token life reports the age"
+)
 expect(
     CredentialStoreAdvice.staleLine(
         provider: .codex,
-        issue: credentialIssue(.codex, error: "HTTP 401", source: .unavailable),
-        source: staleStore,
+        issue: expiredCodexStaleIssue,
+        source: codexStore,
         now: Date(timeIntervalSince1970: 48 * 3600)
     ) == nil,
-    "the Claude store says nothing about Codex"
+    "an age past Claude's 8h but short of Codex's token life explains nothing for Codex"
+)
+expect(
+    CredentialStoreAdvice.staleLine(
+        provider: .codex,
+        issue: credentialIssue(.codex, error: "HTTP 429", source: .unavailable),
+        source: codexStore,
+        now: Date(timeIntervalSince1970: 11 * 24 * 3600)
+    ) == nil,
+    "a Codex rate limit is not a credential problem"
 )
 // The state this is actually seen in: the last good reading is being carried, so
 // the visible status is "using cached data" and only the error names the expiry.

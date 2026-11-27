@@ -178,7 +178,10 @@ public static class UsageIssueFormatter
         {
             UsageIssueKind.Disabled => localizer.Text(L10nKey.RecoveryEnableProvider),
             UsageIssueKind.RateLimited => localizer.Text(L10nKey.RecoveryWaitForCooldown),
-            UsageIssueKind.MissingCredentials => localizer.Text(L10nKey.RecoveryCheckCredentials),
+            // Same reason as below: one command, the one for this provider.
+            UsageIssueKind.MissingCredentials => provider == Provider.Claude
+                ? localizer.Text(L10nKey.RecoverySignInClaude)
+                : localizer.Text(L10nKey.RecoverySignInCodex),
             // Name only the command the user actually has to run. Listing both
             // providers made them read past the half that did not apply to them.
             UsageIssueKind.ExpiredCredentials => provider == Provider.Claude

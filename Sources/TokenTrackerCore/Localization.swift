@@ -131,9 +131,10 @@ public struct Localizer {
         .statusUnavailableDetail: "No usage value is currently available.",
         .recoveryEnableProvider: "Enable the provider if you want Tokki to check it again.",
         .recoveryWaitForCooldown: "Wait for the cooldown to pass or use a longer refresh interval.",
-        .recoveryCheckCredentials: "Sign in to the provider CLI/app, then refresh Tokki.",
+        .recoverySignInClaude: "Run `claude` and type `/login` to sign in.",
+        .recoverySignInCodex: "Run `codex login` to sign in.",
         .recoverySignInAgainClaude: "Starting `claude` refreshes the saved token. If it still fails, run `/login` inside it.",
-        .recoverySignInAgainCodex: "Sign in again: run `codex login`. Refresh Tokki afterwards.",
+        .recoverySignInAgainCodex: "Send one request in `codex` to refresh the saved token. If it still fails, run `codex login`.",
         .recoveryUpdateOrTryLater: "Try again later. If this keeps happening, update Tokki.",
         .recoveryCheckNetwork: "Check your network connection and try again.",
         .recoveryRefreshLater: "Refresh again later.",
@@ -281,9 +282,10 @@ public struct Localizer {
         .statusUnavailableDetail: "현재 표시할 사용량 값이 없습니다.",
         .recoveryEnableProvider: "다시 확인하려면 제공자를 켜세요.",
         .recoveryWaitForCooldown: "쿨다운이 끝날 때까지 기다리거나 새로고침 간격을 늘리세요.",
-        .recoveryCheckCredentials: "제공자 CLI/앱에 로그인한 뒤 Tokki를 새로고침하세요.",
+        .recoverySignInClaude: "`claude`를 실행한 뒤 `/login`을 입력해 로그인하세요.",
+        .recoverySignInCodex: "`codex login`을 실행해 로그인하세요.",
         .recoverySignInAgainClaude: "`claude`를 한 번 실행하면 저장된 토큰이 갱신됩니다. 그래도 안 되면 그 안에서 `/login`을 입력하세요.",
-        .recoverySignInAgainCodex: "다시 로그인하세요. `codex login`을 실행한 뒤 Tokki를 새로고침하세요.",
+        .recoverySignInAgainCodex: "`codex`에서 요청을 한 번 보내면 저장된 토큰이 갱신됩니다. 그래도 안 되면 `codex login`을 실행하세요.",
         .recoveryUpdateOrTryLater: "나중에 다시 시도하세요. 계속 발생하면 Tokki를 업데이트하세요.",
         .recoveryCheckNetwork: "네트워크 연결을 확인한 뒤 다시 시도하세요.",
         .recoveryRefreshLater: "나중에 다시 새로고침하세요.",
@@ -432,7 +434,8 @@ public enum L10nKey: String {
     case statusUnavailableDetail
     case recoveryEnableProvider
     case recoveryWaitForCooldown
-    case recoveryCheckCredentials
+    case recoverySignInClaude
+    case recoverySignInCodex
     case recoverySignInAgainClaude
     case recoverySignInAgainCodex
     case recoveryUpdateOrTryLater

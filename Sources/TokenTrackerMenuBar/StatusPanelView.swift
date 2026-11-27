@@ -224,7 +224,7 @@ private struct ProviderCard: View {
         let staleCredentials = CredentialStoreAdvice.staleLine(
             provider: usage.provider,
             issue: issue,
-            source: context.claudeCredentialSource,
+            source: usage.provider == .claude ? context.claudeCredentialSource : context.codexCredentialSource,
             localizer: localizer
         )
         // With numbers on the card the status badge already says what happened; the

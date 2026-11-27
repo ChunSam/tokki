@@ -28,6 +28,8 @@ struct StatusPanelContext {
     let sparklines: [Provider: String]
     let historyTrendText: String
     let claudeCredentialSource: ClaudeCredentialSource
+    /// `~/.codex/auth.json`, read the same way: attributes only.
+    let codexCredentialSource: ClaudeCredentialSource
     let launchAtLoginEnabled: Bool
     let launchAtLoginStatus: String
     let runningInstanceCount: Int

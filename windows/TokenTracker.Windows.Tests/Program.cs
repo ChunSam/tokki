@@ -582,6 +582,20 @@ Expect(codexRecovery?.Contains("/login") == false, "Codex recovery does not make
 var claudeRecovery = UsageIssueFormatter.Issue(ProviderUsage.Unavailable(Provider.Claude, "HTTP 401 from Claude API")).Recovery;
 Expect(claudeRecovery?.Contains("/login") == true, "Claude recovery names the Claude sign-in command");
 Expect(claudeRecovery?.Contains("codex login") == false, "Claude recovery does not mention Codex");
+// A lapsed Codex token is renewed by using Codex once; signing in is the fallback.
+Expect(codexRecovery?.Contains("`codex`") == true, "Codex recovery first says to use Codex once");
+var missingClaudeRecovery = UsageIssueFormatter.Issue(ProviderUsage.Unavailable(Provider.Claude, "Missing credentials")).Recovery;
+Expect(missingClaudeRecovery?.Contains("/login") == true, "Missing Claude credentials name the Claude sign-in command");
+Expect(missingClaudeRecovery?.Contains("codex") == false, "Missing Claude credentials do not mention Codex");
+var missingCodexRecovery = UsageIssueFormatter.Issue(ProviderUsage.Unavailable(Provider.Codex, "Missing credentials")).Recovery;
+Expect(missingCodexRecovery?.Contains("codex login") == true, "Missing Codex credentials name the Codex sign-in command");
+Expect(missingCodexRecovery?.Contains("/login") == false, "Missing Codex credentials do not mention Claude");
+var koreanRecoveries = new Localizer(AppLanguage.Korean);
+var englishRecoveries = new Localizer(AppLanguage.English);
+Expect(
+    koreanRecoveries.Text(L10nKey.RecoverySignInClaude) != englishRecoveries.Text(L10nKey.RecoverySignInClaude)
+        && koreanRecoveries.Text(L10nKey.RecoverySignInCodex) != englishRecoveries.Text(L10nKey.RecoverySignInCodex),
+    "Both sign-in recoveries have Korean text");
 
 // Credential expiry: the app reads tokens the provider CLIs refresh, so it has to
 // recognize a lapsed one locally instead of spending a request to be told 401.
@@ -1073,9 +1087,19 @@ Expect(
 Expect(
     CredentialStoreAdvice.StaleLine(Provider.Claude, CredentialIssue(Provider.Claude, "HTTP 429", UsageSource.Unavailable), abandonedStore, now.AddHours(48)) is null,
     "A rate limit is not a credential problem, however old the store is");
+// Codex: its own store, judged against its own 10-day token life.
+var codexStore = new ClaudeCredentialSource(ClaudeCredentialStore.CredentialsFile, now);
+var expiredCodexIssue = CredentialIssue(Provider.Codex, "Credentials expired for Codex API", UsageSource.Unavailable);
+ExpectEqual(
+    CredentialStoreAdvice.StaleLine(Provider.Codex, expiredCodexIssue, codexStore, now.AddDays(11)),
+    "Credentials not refreshed in 11d 0h",
+    "A lapsed Codex token over a store left alone past its token life reports the age");
 Expect(
-    CredentialStoreAdvice.StaleLine(Provider.Codex, CredentialIssue(Provider.Codex, "HTTP 401", UsageSource.Unavailable), abandonedStore, now.AddHours(48)) is null,
-    "The Claude store says nothing about Codex");
+    CredentialStoreAdvice.StaleLine(Provider.Codex, expiredCodexIssue, codexStore, now.AddHours(48)) is null,
+    "An age past Claude's 8h but short of Codex's token life explains nothing for Codex");
+Expect(
+    CredentialStoreAdvice.StaleLine(Provider.Codex, CredentialIssue(Provider.Codex, "HTTP 429", UsageSource.Unavailable), codexStore, now.AddDays(11)) is null,
+    "A Codex rate limit is not a credential problem");
 // The state this is actually seen in: the last good reading is being carried, so the
 // visible status is "using cached data" and only the error names the expiry.
 Expect(

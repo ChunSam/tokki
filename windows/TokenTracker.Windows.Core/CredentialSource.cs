@@ -48,14 +48,21 @@ public sealed record ClaudeCredentialSource(ClaudeCredentialStore Kind, DateTime
 }
 
 /// <summary>
-/// The line the menu was missing when Claude usage stops loading: nothing has written
-/// the credential store for longer than a token lives, so the fix is not to wait but
-/// to run the CLI once.
+/// The line the menu was missing when usage stops loading: nothing has written the
+/// credential store for longer than a token lives, so the fix is not to wait but to
+/// use the CLI once.
 ///
 /// The plain "sign in again" recovery is complete advice for a token that merely
 /// lapsed. It is not the whole story for a store that has been abandoned — a user who
 /// signs in through the desktop app has signed in, and the store still will not move.
 /// Saying how long it has been unwritten is what tells the two apart.
+///
+/// Codex keeps its store in <c>~/.codex/auth.json</c> and renews it only while it is
+/// being used, so a Codex left alone past its token life lapses the same way. The
+/// store is read through <see cref="ClaudeCredentialSource.Detect"/>: the type
+/// describes any file store, the name only records where it started.
+///
+/// Mirrors <c>Sources/TokenTrackerCore/CredentialSource.swift</c>.
 /// </summary>
 public static class CredentialStoreAdvice
 {
@@ -66,8 +73,17 @@ public static class CredentialStoreAdvice
     public static readonly TimeSpan StaleAfter = TimeSpan.FromHours(8);
 
     /// <summary>
-    /// Null unless this is Claude, the failure is a lapsed token, and the store is old
-    /// enough that nothing can still be refreshing it.
+    /// A Codex access token lives 10 days (measured 2026-11-27), so a younger store
+    /// that lapsed was cut short by something else and its age explains nothing.
+    /// </summary>
+    public static readonly TimeSpan CodexStaleAfter = TimeSpan.FromDays(10);
+
+    public static TimeSpan StaleAfterFor(Provider provider) =>
+        provider == Provider.Claude ? StaleAfter : CodexStaleAfter;
+
+    /// <summary>
+    /// Null unless the failure is a lapsed token and <paramref name="source"/> — that
+    /// provider's own store — is old enough that nothing can still be refreshing it.
     /// </summary>
     public static string? StaleLine(
         Provider provider,
@@ -76,7 +92,7 @@ public static class CredentialStoreAdvice
         DateTimeOffset now,
         Localizer? localizer = null)
     {
-        if (provider != Provider.Claude || string.IsNullOrWhiteSpace(issue.TechnicalDetail))
+        if (string.IsNullOrWhiteSpace(issue.TechnicalDetail))
         {
             return null;
         }
@@ -89,7 +105,7 @@ public static class CredentialStoreAdvice
             return null;
         }
 
-        if (source.Age(now) is not { } age || age < StaleAfter)
+        if (source.Age(now) is not { } age || age < StaleAfterFor(provider))
         {
             return null;
         }

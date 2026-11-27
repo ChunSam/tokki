@@ -350,6 +350,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             claudeCredentialSource: ClaudeCredentialSource.detect(
                 credentialsFileURL: DiagnosticsReporter.claudeCredentialsURL
             ),
+            codexCredentialSource: ClaudeCredentialSource.detect(
+                credentialsFileURL: DiagnosticsReporter.codexAuthURL,
+                keychainModifiedAt: nil
+            ),
             launchAtLoginEnabled: loginItemManager.isEnabled,
             launchAtLoginStatus: loginItemManager.statusLabel(localizer: localizer),
             runningInstanceCount: reporter.runningInstanceCount,
