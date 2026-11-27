@@ -88,7 +88,7 @@ internal sealed class DiagnosticsReporter
         lines.Add($"Claude CLI: {ClaudeCliRefresh.Locate() ?? "not found"}");
         lines.Add($"Claude CLI last renewal: {lastRenewal}");
         lines.Add($"Codex auth file exists: {File.Exists(CodexAuthPath)}");
-        // Codex renews its store only while it is used, so this age is what says a
+        // Codex renews its store only when Codex itself runs, so this age is what says a
         // lapsed Codex token was simply left alone.
         var codexSource = ClaudeCredentialSource.Detect(CodexAuthPath);
         var codexLastWritten = codexSource.LastWrittenAt is { } codexWritten ? IsoString(codexWritten) : "unknown";

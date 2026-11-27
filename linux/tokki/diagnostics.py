@@ -101,7 +101,7 @@ def diagnostics_text(
         f"Claude CLI last renewal: {'none' if cli_attempt is None else _iso(cli_attempt.attempted_at) + ' ' + cli_attempt.outcome.value}",
         f"Codex auth file exists: {paths.codex_auth_path().is_file()}",
     ]
-    # Codex renews its store only while it is used, so this age is what says a
+    # Codex renews its store only when Codex itself runs, so this age is what says a
     # lapsed Codex token was simply left alone.
     codex_source = issues.CredentialSource.detect(paths.codex_auth_path())
     codex_age = codex_source.age(now)
