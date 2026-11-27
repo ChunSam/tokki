@@ -40,5 +40,6 @@ description: Tokki 새 버전을 릴리스하고 배포 산출물을 받아 설�
   `tell application "System Events" to tell process "TokenTrackerMenuBar" to click (first menu bar item of (last menu bar))`
   (1.2.0부터 숨은 편집 메뉴 때문에 메뉴 막대가 두 개이고, 상태 항목은 마지막 것에 있다.)
 - System Events 클릭이 `-1719`(osascript에 손쉬운 사용 권한 없음)로 막히면, `usage-cache.json`에서
-  각 제공자의 `source`가 `api`이고 그 제공자의 `updatedAt`이 설치본 실행 뒤인지 본다. 보고에는
-  "API 수집 확인"과 "팝업 화면 미확인"을 따로 적는다 (2026-11-27).
+  제공자마다 `source`가 `api`이고 그 제공자의 `updatedAt`이 설치본 실행 뒤인지 본다. 두 조건을 다 채운
+  제공자만 "API 수집 확인"으로 보고하고, 나머지는 "미확인"으로 적는다. 팝업 화면은 "미확인"으로
+  따로 적는다 (2026-11-27).

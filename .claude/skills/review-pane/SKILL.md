@@ -38,19 +38,19 @@ herdr agent start reviewer --kind claude --pane "$P" --timeout 60000 -- \
 
 ### Codex 리뷰어
 
-2026-11-27에 Codex로 제안서를 읽기 전용 검토했다(재검토는 아직 안 해 봤다). 권한 파일은 Claude용이라
+2026-11-27에 Codex로 제안서를 읽기 전용 검토하고, 고친 뒤 같은 에이전트에게 재검토받았다. 권한 파일은 Claude용이라
 Codex에는 쓰지 않는다.
 
 ```sh
-herdr agent start <이름> --kind codex --pane "$P" --timeout 90000 -- --sandbox read-only --ask-for-approval never
+herdr agent start reviewer --kind codex --pane "$P" --timeout 90000 -- --sandbox read-only --ask-for-approval never
 ```
 
 - **시작하면서 스스로 업데이트할 수 있다.** 이날은 `npm install -g @openai/codex`(0.154.0 → 0.172.0)에
-  11분이 걸렸고, 그동안 `codex` 명령이 사라져 있었다. `agent start`는 `agent_not_ready`로 끝난다.
+  11분이 걸렸고, 그동안 `codex` 명령이 사라져 있었다. 이날 `agent start`는 `agent_not_ready`로 끝났다.
   `herdr pane read "$P"`로 업데이트 중인지 보고, 끝나면("Please restart Codex") `codex --version`을
   확인한 뒤 같은 창에서 다시 시작한다.
-- **업데이트 직후 첫 프롬프트는 사라질 수 있다.** 모델 변경 안내가 뜨면서 `--wait`가 바로 `idle`을
-  돌려줬고 답이 없었다. 창에 작업 흔적이 없으면 같은 프롬프트를 다시 보낸다.
+- **업데이트 직후 첫 프롬프트에 답이 없었다.** 창에는 모델 변경 안내만 있었고, `--wait`는 `idle`을
+  돌려줬다. 창에 작업 흔적이 없으면 같은 프롬프트를 다시 보낸다. 다시 보낸 프롬프트에는 답했다.
 - **결과는 창에서 읽는다.** 4단계의 트랜스크립트 조회는 Claude 리뷰어용이다. Codex는
   `herdr pane read "$P" --source recent-unwrapped --lines 600`으로 답 전체를 읽었다.
 
