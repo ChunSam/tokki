@@ -13,8 +13,10 @@ description: Tokki 새 버전을 릴리스하고 배포 산출물을 받아 설�
 3. DMG·deb와 각 `.sha256`을 새 디렉터리에 받아 그 자리에서 `shasum -c`. 마운트해 버전을 보고
    `scripts/verify_app_bundle.swift`로 검사한다. 판정은 아래 "macOS 검사 세부"를 따른다.
 4. 앱 종료 → 설치본을 휴지통으로 → `ditto`로 `/Applications`에 설치 → 실행 → 바뀐 화면 확인.
-5. Windows VM에서 zip 두 개를 검사하고 arm64를 설치본 자리에 넣어 실행한다.
-   이 단계를 시작할 때 `references/windows.md`를 읽는다 (VM에 보낼 스크립트와 통과 기준).
+5. `timeout 30 utmctl status Windows`로 VM 상태를 본다. `started`면 `references/windows.md`를 읽고
+   (VM에 보낼 스크립트와 통과 기준) zip 두 개를 검사한 뒤 arm64를 설치본 자리에 넣어 실행한다.
+   `stopped`면 UTM에서 켜 달라고 한다. 시간 초과나 빈 출력이면 상태 미확인이다. 검사를 못 했으면
+   릴리스 보고에 "Windows VM 검사 안 함"을 남긴다.
 
 ## Gotchas
 
@@ -25,7 +27,7 @@ description: Tokki 새 버전을 릴리스하고 배포 산출물을 받아 설�
 
 ## macOS 검사 세부 (3·4단계)
 
-판정을 헷갈리게 했던 것들이다. 셋 다 실제로 한 번씩 물렸다.
+판정을 헷갈리게 했던 것들이다. 모두 실제로 한 번씩 물렸다.
 
 - `codesign -v`가 "not signed at all"을 내도 정상이다. ad-hoc 서명은 실행 파일에만 붙고
   번들 전체에는 붙지 않는다. 번들 검사는 `scripts/verify_app_bundle.swift`가 맡는다.
@@ -37,3 +39,6 @@ description: Tokki 새 버전을 릴리스하고 배포 산출물을 받아 설�
 - 팝업은 computer-use로 보이지 않는다. System Events로 연다:
   `tell application "System Events" to tell process "TokenTrackerMenuBar" to click (first menu bar item of (last menu bar))`
   (1.2.0부터 숨은 편집 메뉴 때문에 메뉴 막대가 두 개이고, 상태 항목은 마지막 것에 있다.)
+- System Events 클릭이 `-1719`(osascript에 손쉬운 사용 권한 없음)로 막히면, `usage-cache.json`에서
+  각 제공자의 `source`가 `api`이고 그 제공자의 `updatedAt`이 설치본 실행 뒤인지 본다. 보고에는
+  "API 수집 확인"과 "팝업 화면 미확인"을 따로 적는다 (2026-11-27).

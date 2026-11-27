@@ -24,9 +24,15 @@ up on 2026-11-03 on an M1 Pro (32 GB).
    toolbar's CD menu, *Install Windows Guest Tools…*) and restart. That installs
    the QEMU guest agent, which is what lets the Mac drive the VM.
 
-`utmctl ip-address Windows` answering is the sign the agent is up.
+`timeout 30 utmctl ip-address Windows` answering is the sign the agent is up.
 
 ## Driving it from the Mac
+
+Wrap direct `utmctl` calls in a host-side timeout, e.g. `timeout 30 utmctl status
+Windows`. A bare `utmctl status` sat past two minutes on 2026-11-27, and exit 124
+or an empty result leaves the VM state unknown. The timeout argument of
+`scripts/utm-windows-ps.sh` limits only its completion-marker polling, so put an
+outer timeout around the whole call when it must be bounded.
 
 `scripts/utm-windows-ps.sh` runs a PowerShell script read from stdin inside the
 VM and prints its output; `--user` runs it as the signed-in user. Feed scripts
@@ -58,7 +64,7 @@ What the script works around, each of which cost a debugging round:
 Source goes in as an archive pushed through the agent:
 
 ```bash
-git archive --format=zip HEAD windows scripts | utmctl file push Windows 'C:\Users\Public\tt-src.zip'
+git archive --format=zip HEAD windows scripts | timeout 60 utmctl file push Windows 'C:\Users\Public\tt-src.zip'
 ```
 
 ## Provisioning
